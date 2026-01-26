@@ -90,9 +90,7 @@ class BluOSDiscovery:
                 _LOG.debug("Device removed: %s", name)
                 del self._devices[name]
 
-    async def _resolve_service(
-        self, zeroconf: Zeroconf, service_type: str, name: str
-    ) -> None:
+    async def _resolve_service(self, zeroconf: Zeroconf, service_type: str, name: str) -> None:
         """Resolve service information."""
         try:
             info = AsyncServiceInfo(service_type, name)
@@ -101,9 +99,7 @@ class BluOSDiscovery:
         except Exception as e:
             _LOG.warning("Failed to resolve service %s: %s", name, e)
 
-    async def _process_service_info(
-        self, name: str, info: AsyncServiceInfo
-    ) -> None:
+    async def _process_service_info(self, name: str, info: AsyncServiceInfo) -> None:
         """Process resolved service information."""
         addresses = info.parsed_addresses()
         if not addresses:

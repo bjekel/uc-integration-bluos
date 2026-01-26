@@ -6,7 +6,6 @@ import tempfile
 from unittest.mock import MagicMock
 
 import pytest
-
 from config import BluOSDevice, Devices
 
 

@@ -6,6 +6,8 @@ from enum import IntEnum
 from typing import Any
 
 import ucapi
+from config import BluOSDevice, Devices
+from discover import DiscoveredDevice, discover_bluos_players
 from ucapi.setup import (
     AbortDriverSetup,
     DriverSetupRequest,
@@ -16,9 +18,6 @@ from ucapi.setup import (
     SetupError,
     UserDataResponse,
 )
-
-from config import BluOSDevice, Devices
-from discover import DiscoveredDevice, discover_bluos_players
 
 _LOG = logging.getLogger(__name__)
 
@@ -148,7 +147,13 @@ def _show_discovery_options() -> SetupAction:
                     "dropdown": {
                         "value": "auto",
                         "items": [
-                            {"id": "auto", "label": {"en": "Auto-discover (recommended)", "de": "Automatisch erkennen (empfohlen)"}},
+                            {
+                                "id": "auto",
+                                "label": {
+                                    "en": "Auto-discover (recommended)",
+                                    "de": "Automatisch erkennen (empfohlen)",
+                                },
+                            },
                             {"id": "manual", "label": {"en": "Manual IP entry", "de": "Manuelle IP-Eingabe"}},
                         ],
                     }
@@ -188,7 +193,10 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
             title={"en": "No Devices Found", "de": "Keine Geräte gefunden"},
             settings={
                 "retry": {
-                    "label": {"en": "No BluOS devices found. Try again?", "de": "Keine BluOS-Geräte gefunden. Erneut versuchen?"},
+                    "label": {
+                        "en": "No BluOS devices found. Try again?",
+                        "de": "Keine BluOS-Geräte gefunden. Erneut versuchen?",
+                    },
                     "field": {
                         "dropdown": {
                             "value": "yes",
@@ -214,10 +222,12 @@ def _show_device_choice() -> SetupAction:
         label = device.name
         if device.model:
             label = f"{device.name} ({device.model})"
-        items.append({
-            "id": str(i),
-            "label": {"en": f"{label} - {device.host}"},
-        })
+        items.append(
+            {
+                "id": str(i),
+                "label": {"en": f"{label} - {device.host}"},
+            }
+        )
 
     return RequestUserInput(
         title={"en": "Select Device", "de": "Gerät auswählen"},

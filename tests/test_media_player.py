@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import ucapi
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, States
-
-from bluos import BluOSPlayer, States as BluOSStates
+from bluos import BluOSPlayer
+from bluos import States as BluOSStates
 from config import BluOSDevice
 from media_player import BLUOS_FEATURES, BluOSMediaPlayer
+from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, States
 
 
 class TestBluOSFeatures:

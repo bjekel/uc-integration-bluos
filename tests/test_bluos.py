@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from bluos import (
     BACKOFF_FACTOR,
     MAX_RECONNECT_DELAY,

@@ -9,11 +9,13 @@ from discover import DiscoveredDevice
 from setup_flow import (
     SetupSteps,
     driver_setup_handler,
+    get_configured_device,
     get_setup_data_schema,
 )
-from ucapi.setup import (
+from ucapi import (
     AbortDriverSetup,
     DriverSetupRequest,
+    IntegrationSetupError,
     RequestUserInput,
     SetupComplete,
     SetupError,
@@ -55,12 +57,13 @@ class TestDriverSetupHandler:
         setup_flow._setup_step = SetupSteps.INIT
         setup_flow._discovered_devices = []
         setup_flow._selected_device = None
+        setup_flow._configured_device = None
         yield
 
     @pytest.mark.asyncio
     async def test_initial_setup_request(self):
         """Test handling initial setup request."""
-        msg = DriverSetupRequest(reconfigure=False)
+        msg = DriverSetupRequest(reconfigure=False, setup_data={})
 
         result = await driver_setup_handler(msg)
 
@@ -70,7 +73,7 @@ class TestDriverSetupHandler:
     @pytest.mark.asyncio
     async def test_reconfigure_request(self):
         """Test handling reconfigure request."""
-        msg = DriverSetupRequest(reconfigure=True)
+        msg = DriverSetupRequest(reconfigure=True, setup_data={})
 
         result = await driver_setup_handler(msg)
 
@@ -80,7 +83,7 @@ class TestDriverSetupHandler:
     @pytest.mark.asyncio
     async def test_abort_setup(self):
         """Test handling abort setup."""
-        msg = AbortDriverSetup()
+        msg = AbortDriverSetup(error=IntegrationSetupError.NONE)
 
         result = await driver_setup_handler(msg)
 
@@ -139,8 +142,9 @@ class TestDriverSetupHandler:
             result = await driver_setup_handler(msg)
 
         assert isinstance(result, RequestUserInput)
-        # Still in DISCOVER step for retry
-        assert "retry" in result.settings
+        # Check settings list contains retry option
+        setting_ids = [s["id"] for s in result.settings]
+        assert "retry" in setting_ids
 
     @pytest.mark.asyncio
     async def test_discovery_manual(self):
@@ -209,14 +213,14 @@ class TestDriverSetupHandler:
         result = await driver_setup_handler(msg)
 
         assert isinstance(result, SetupComplete)
-        assert result.data is not None
-        assert "device" in result.data
 
-        device_data = result.data["device"]
-        assert device_data["name"] == "My BluOS Player"
-        assert device_data["address"] == "192.168.1.100"
-        assert device_data["volume_step"] == 10
-        assert device_data["id"] == "00:11:22:33:44:55"
+        # Get the configured device from the module
+        device = get_configured_device()
+        assert device is not None
+        assert device.name == "My BluOS Player"
+        assert device.address == "192.168.1.100"
+        assert device.volume_step == 10
+        assert device.id == "00:11:22:33:44:55"
 
     @pytest.mark.asyncio
     async def test_device_configure_without_mac(self):
@@ -239,9 +243,11 @@ class TestDriverSetupHandler:
         result = await driver_setup_handler(msg)
 
         assert isinstance(result, SetupComplete)
-        device_data = result.data["device"]
+
+        device = get_configured_device()
+        assert device is not None
         # ID should be generated from IP
-        assert device_data["id"] == "192_168_1_100"
+        assert device.id == "192_168_1_100"
 
     @pytest.mark.asyncio
     async def test_device_configure_no_selected_device(self):
@@ -275,3 +281,30 @@ class TestDriverSetupHandler:
         result = await driver_setup_handler(msg)
 
         assert isinstance(result, SetupError)
+
+
+class TestGetConfiguredDevice:
+    """Tests for get_configured_device function."""
+
+    def test_get_and_clear(self):
+        """Test getting configured device clears it."""
+        device = BluOSDevice(
+            id="test",
+            name="Test",
+            address="192.168.1.100",
+        )
+        setup_flow._configured_device = device
+
+        result = get_configured_device()
+        assert result == device
+
+        # Should be cleared after retrieval
+        result2 = get_configured_device()
+        assert result2 is None
+
+    def test_get_when_none(self):
+        """Test getting configured device when none set."""
+        setup_flow._configured_device = None
+
+        result = get_configured_device()
+        assert result is None

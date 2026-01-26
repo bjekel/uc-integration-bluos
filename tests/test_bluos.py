@@ -134,12 +134,18 @@ class TestBluOSPlayer:
         mock_pyblu_player = MagicMock()
         mock_pyblu_player.sync_status = AsyncMock(side_effect=PlayerUnreachableError("Cannot reach"))
 
+        # Register error handler to prevent pyee from raising unhandled error
+        error_received = []
+        player.events.on(Events.ERROR, lambda err: error_received.append(err))
+
         with patch("bluos.Player", return_value=mock_pyblu_player):
             result = await player.connect()
 
             assert result is False
             assert player.available is False
             assert player.state == States.UNAVAILABLE
+            assert len(error_received) == 1
+            assert "Cannot reach" in error_received[0]
 
     @pytest.mark.asyncio
     async def test_disconnect(self, player):

@@ -4,10 +4,8 @@
 import asyncio
 import logging
 import os
-import sys
 from typing import Any
 
-import config
 import setup_flow
 import ucapi
 from bluos import BluOSPlayer
@@ -212,15 +210,14 @@ async def _on_unsubscribe_entities(entity_ids: list[str]) -> None:
 # Setup Flow Handler
 
 
-async def _setup_handler(msg: ucapi.setup.SetupDriver) -> ucapi.setup.SetupAction:
+async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     """Handle setup driver messages."""
     result = await setup_flow.driver_setup_handler(msg)
 
     # Check if setup completed with device data
-    if isinstance(result, ucapi.setup.SetupComplete) and result.data:
-        device_data = result.data.get("device")
-        if device_data and _devices:
-            device = BluOSDevice.from_dict(device_data)
+    if isinstance(result, ucapi.SetupComplete):
+        device = setup_flow.get_configured_device()
+        if device and _devices:
             _devices.add_or_update(device)
 
     return result

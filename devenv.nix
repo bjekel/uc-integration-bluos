@@ -9,12 +9,25 @@
     version = "3.11";
     venv = {
       enable = true;
-      requirements = ./requirements.txt;
+      requirements = ''
+        # Runtime dependencies
+        ucapi==0.5.1
+        pyblu>=0.7.0
+        pyee~=13.0.0
+        zeroconf>=0.80.0
+        aiohttp>=3.9.0
+        # Dev dependencies
+        pylint
+        pytest
+        pytest-asyncio
+        pyinstaller
+      '';
     };
   };
 
   # Common packages for all profiles
   packages = with pkgs; [
+    claude-code
     git
     gnumake
     jq
@@ -81,8 +94,8 @@
     '';
   };
 
-  # Pre-commit hooks
-  pre-commit.hooks = {
+  # Git hooks
+  git-hooks.hooks = {
     black.enable = true;
     isort.enable = true;
   };

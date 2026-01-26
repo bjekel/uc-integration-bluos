@@ -68,7 +68,8 @@ class TestBluOSMediaPlayer:
     def test_initialization(self, entity):
         """Test entity initialization."""
         assert entity.id == "bluos_test_device"
-        assert entity.name == "Test Player"
+        # ucapi wraps name in dict with language keys
+        assert entity.name == {"en": "Test Player"}
         assert entity.device_class == DeviceClasses.SPEAKER
         assert entity.features == BLUOS_FEATURES
 
@@ -168,6 +169,9 @@ class TestBluOSMediaPlayer:
 
     def test_set_unavailable_already_unavailable(self, entity):
         """Test set_unavailable when already unavailable returns empty."""
+        # First call sets _last_attributes to UNAVAILABLE
+        entity.set_unavailable()
+        # Second call should return empty since already unavailable
         changed = entity.set_unavailable()
         assert changed == {}
 

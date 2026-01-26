@@ -1,14 +1,12 @@
 """Setup flow for BluOS integration."""
 
-import asyncio
 import logging
 from enum import IntEnum
 from typing import Any
 
-import ucapi
-from config import BluOSDevice, Devices
+from config import BluOSDevice
 from discover import DiscoveredDevice, discover_bluos_players
-from ucapi.setup import (
+from ucapi import (
     AbortDriverSetup,
     DriverSetupRequest,
     RequestUserInput,
@@ -36,6 +34,15 @@ class SetupSteps(IntEnum):
 _setup_step = SetupSteps.INIT
 _discovered_devices: list[DiscoveredDevice] = []
 _selected_device: DiscoveredDevice | None = None
+_configured_device: BluOSDevice | None = None
+
+
+def get_configured_device() -> BluOSDevice | None:
+    """Get the device configured during setup and clear it."""
+    global _configured_device
+    device = _configured_device
+    _configured_device = None
+    return device
 
 
 async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
@@ -103,21 +110,34 @@ async def _handle_user_data(msg: UserDataResponse) -> SetupAction:
 def _show_configuration_mode() -> SetupAction:
     """Show configuration mode selection."""
     return RequestUserInput(
-        title={"en": "BluOS Configuration", "de": "BluOS Konfiguration"},
-        settings={
-            "action": {
+        {"en": "BluOS Configuration", "de": "BluOS Konfiguration"},
+        [
+            {
+                "id": "action",
                 "label": {"en": "Action", "de": "Aktion"},
                 "field": {
                     "dropdown": {
                         "value": "add",
                         "items": [
-                            {"id": "add", "label": {"en": "Add new device", "de": "Neues Gerät hinzufügen"}},
-                            {"id": "reset", "label": {"en": "Reset configuration", "de": "Konfiguration zurücksetzen"}},
+                            {
+                                "id": "add",
+                                "label": {
+                                    "en": "Add new device",
+                                    "de": "Neues Gerät hinzufügen",
+                                },
+                            },
+                            {
+                                "id": "reset",
+                                "label": {
+                                    "en": "Reset configuration",
+                                    "de": "Konfiguration zurücksetzen",
+                                },
+                            },
                         ],
                     }
                 },
             }
-        },
+        ],
     )
 
 
@@ -139,9 +159,10 @@ async def _handle_configuration_mode(msg: UserDataResponse) -> SetupAction:
 def _show_discovery_options() -> SetupAction:
     """Show discovery options."""
     return RequestUserInput(
-        title={"en": "Device Discovery", "de": "Geräteerkennung"},
-        settings={
-            "discovery_mode": {
+        {"en": "Device Discovery", "de": "Geräteerkennung"},
+        [
+            {
+                "id": "discovery_mode",
                 "label": {"en": "Discovery Method", "de": "Erkennungsmethode"},
                 "field": {
                     "dropdown": {
@@ -154,16 +175,26 @@ def _show_discovery_options() -> SetupAction:
                                     "de": "Automatisch erkennen (empfohlen)",
                                 },
                             },
-                            {"id": "manual", "label": {"en": "Manual IP entry", "de": "Manuelle IP-Eingabe"}},
+                            {
+                                "id": "manual",
+                                "label": {
+                                    "en": "Manual IP entry",
+                                    "de": "Manuelle IP-Eingabe",
+                                },
+                            },
                         ],
                     }
                 },
             },
-            "manual_address": {
-                "label": {"en": "IP Address (for manual entry)", "de": "IP-Adresse (für manuelle Eingabe)"},
+            {
+                "id": "manual_address",
+                "label": {
+                    "en": "IP Address (for manual entry)",
+                    "de": "IP-Adresse (für manuelle Eingabe)",
+                },
                 "field": {"text": {"value": ""}},
             },
-        },
+        ],
     )
 
 
@@ -190,9 +221,10 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
 
     if not _discovered_devices:
         return RequestUserInput(
-            title={"en": "No Devices Found", "de": "Keine Geräte gefunden"},
-            settings={
-                "retry": {
+            {"en": "No Devices Found", "de": "Keine Geräte gefunden"},
+            [
+                {
+                    "id": "retry",
                     "label": {
                         "en": "No BluOS devices found. Try again?",
                         "de": "Keine BluOS-Geräte gefunden. Erneut versuchen?",
@@ -201,14 +233,29 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
                         "dropdown": {
                             "value": "yes",
                             "items": [
-                                {"id": "yes", "label": {"en": "Yes, try again", "de": "Ja, erneut versuchen"}},
-                                {"id": "manual", "label": {"en": "Enter IP manually", "de": "IP manuell eingeben"}},
-                                {"id": "no", "label": {"en": "Cancel", "de": "Abbrechen"}},
+                                {
+                                    "id": "yes",
+                                    "label": {
+                                        "en": "Yes, try again",
+                                        "de": "Ja, erneut versuchen",
+                                    },
+                                },
+                                {
+                                    "id": "manual",
+                                    "label": {
+                                        "en": "Enter IP manually",
+                                        "de": "IP manuell eingeben",
+                                    },
+                                },
+                                {
+                                    "id": "no",
+                                    "label": {"en": "Cancel", "de": "Abbrechen"},
+                                },
                             ],
                         }
                     },
                 }
-            },
+            ],
         )
 
     _setup_step = SetupSteps.DEVICE_CHOICE
@@ -230,9 +277,10 @@ def _show_device_choice() -> SetupAction:
         )
 
     return RequestUserInput(
-        title={"en": "Select Device", "de": "Gerät auswählen"},
-        settings={
-            "device": {
+        {"en": "Select Device", "de": "Gerät auswählen"},
+        [
+            {
+                "id": "device",
                 "label": {"en": "BluOS Player", "de": "BluOS-Player"},
                 "field": {
                     "dropdown": {
@@ -241,7 +289,7 @@ def _show_device_choice() -> SetupAction:
                     }
                 },
             }
-        },
+        ],
     )
 
 
@@ -256,7 +304,7 @@ async def _handle_device_choice(msg: UserDataResponse) -> SetupAction:
         _setup_step = SetupSteps.DEVICE_CONFIGURE
         return _show_device_configure()
     else:
-        return SetupError(error_type="NOT_FOUND")
+        return SetupError()
 
 
 def _show_device_configure() -> SetupAction:
@@ -264,14 +312,19 @@ def _show_device_configure() -> SetupAction:
     default_name = _selected_device.name if _selected_device else "BluOS Player"
 
     return RequestUserInput(
-        title={"en": "Device Configuration", "de": "Gerätekonfiguration"},
-        settings={
-            "name": {
+        {"en": "Device Configuration", "de": "Gerätekonfiguration"},
+        [
+            {
+                "id": "name",
                 "label": {"en": "Device Name", "de": "Gerätename"},
                 "field": {"text": {"value": default_name}},
             },
-            "volume_step": {
-                "label": {"en": "Volume Step (1-10)", "de": "Lautstärkeschritt (1-10)"},
+            {
+                "id": "volume_step",
+                "label": {
+                    "en": "Volume Step (1-10)",
+                    "de": "Lautstärkeschritt (1-10)",
+                },
                 "field": {
                     "number": {
                         "value": 5,
@@ -281,8 +334,12 @@ def _show_device_configure() -> SetupAction:
                     }
                 },
             },
-            "timeout": {
-                "label": {"en": "Connection Timeout (seconds)", "de": "Verbindungs-Timeout (Sekunden)"},
+            {
+                "id": "timeout",
+                "label": {
+                    "en": "Connection Timeout (seconds)",
+                    "de": "Verbindungs-Timeout (Sekunden)",
+                },
                 "field": {
                     "number": {
                         "value": 5,
@@ -292,13 +349,13 @@ def _show_device_configure() -> SetupAction:
                     }
                 },
             },
-        },
+        ],
     )
 
 
 async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
     """Handle device configuration."""
-    global _setup_step, _selected_device
+    global _setup_step, _selected_device, _configured_device
 
     if not _selected_device:
         return SetupError()
@@ -311,7 +368,7 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
     # Use MAC if available, otherwise generate from IP
     device_id = _selected_device.mac or _selected_device.host.replace(".", "_")
 
-    device = BluOSDevice(
+    _configured_device = BluOSDevice(
         id=device_id,
         name=name,
         address=_selected_device.host,
@@ -321,19 +378,13 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
         model=_selected_device.model,
     )
 
-    _LOG.info("Device configured: %s (%s)", device.name, device.address)
+    _LOG.info("Device configured: %s (%s)", _configured_device.name, _configured_device.address)
 
     # Reset state
     _setup_step = SetupSteps.INIT
     _selected_device = None
 
-    # Return complete with device data
-    # The driver.py will handle adding the device
-    return SetupComplete(
-        data={
-            "device": device.to_dict(),
-        }
-    )
+    return SetupComplete()
 
 
 def get_setup_data_schema() -> dict[str, Any]:
@@ -347,8 +398,12 @@ def get_setup_data_schema() -> dict[str, Any]:
                 "field": {
                     "label": {
                         "value": {
-                            "en": "This integration allows you to control BluOS-enabled streaming players including Bluesound, NAD, and DALI devices.\n\nClick 'Next' to start device discovery.",
-                            "de": "Diese Integration ermöglicht die Steuerung von BluOS-fähigen Streaming-Playern einschließlich Bluesound-, NAD- und DALI-Geräten.\n\nKlicken Sie auf 'Weiter', um die Geräteerkennung zu starten.",
+                            "en": "This integration allows you to control BluOS-enabled "
+                            "streaming players including Bluesound, NAD, and DALI devices."
+                            "\n\nClick 'Next' to start device discovery.",
+                            "de": "Diese Integration ermöglicht die Steuerung von BluOS-fähigen "
+                            "Streaming-Playern einschließlich Bluesound-, NAD- und DALI-Geräten."
+                            "\n\nKlicken Sie auf 'Weiter', um die Geräteerkennung zu starten.",
                         }
                     }
                 },

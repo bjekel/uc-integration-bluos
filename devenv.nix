@@ -1,6 +1,8 @@
 { pkgs, lib, config, ... }:
 
 {
+  cachix.enable = false;
+
   # Base Python configuration
   languages.python = {
     enable = true;
@@ -27,10 +29,16 @@
 
   # Common scripts
   scripts = {
-    lint.exec = ''
+    lint-check.exec = ''
       pylint intg-bluos/
       black --check intg-bluos/ tests/
       isort --check-only intg-bluos/ tests/
+    '';
+
+    lint-fix.exec = ''
+      pylint intg-bluos/
+      black intg-bluos/ tests/
+      isort intg-bluos/ tests/
     '';
 
     format.exec = ''

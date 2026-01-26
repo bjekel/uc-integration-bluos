@@ -5,11 +5,10 @@ import logging
 from enum import StrEnum
 from typing import Any, Optional
 
+from config import BluOSDevice
 from pyblu import Input, Player, Preset, Status, SyncStatus
 from pyblu.errors import PlayerError, PlayerUnreachableError
 from pyee.asyncio import AsyncIOEventEmitter
-
-from config import BluOSDevice
 
 _LOG = logging.getLogger(__name__)
 
@@ -187,9 +186,7 @@ class BluOSPlayer:
                 self._reconnect_delay,
             )
             await asyncio.sleep(self._reconnect_delay)
-            self._reconnect_delay = min(
-                self._reconnect_delay * BACKOFF_FACTOR, MAX_RECONNECT_DELAY
-            )
+            self._reconnect_delay = min(self._reconnect_delay * BACKOFF_FACTOR, MAX_RECONNECT_DELAY)
             await self.connect()
 
         self._reconnect_task = self._loop.create_task(reconnect())

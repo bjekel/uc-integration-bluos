@@ -3,6 +3,14 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import setup_flow
+from config import BluOSDevice
+from discover import DiscoveredDevice
+from setup_flow import (
+    SetupSteps,
+    driver_setup_handler,
+    get_setup_data_schema,
+)
 from ucapi.setup import (
     AbortDriverSetup,
     DriverSetupRequest,
@@ -10,15 +18,6 @@ from ucapi.setup import (
     SetupComplete,
     SetupError,
     UserDataResponse,
-)
-
-from config import BluOSDevice
-from discover import DiscoveredDevice
-import setup_flow
-from setup_flow import (
-    SetupSteps,
-    driver_setup_handler,
-    get_setup_data_schema,
 )
 
 
@@ -147,10 +146,7 @@ class TestDriverSetupHandler:
     async def test_discovery_manual(self):
         """Test manual IP entry."""
         setup_flow._setup_step = SetupSteps.DISCOVER
-        msg = UserDataResponse(input_values={
-            "discovery_mode": "manual",
-            "manual_address": "192.168.1.200"
-        })
+        msg = UserDataResponse(input_values={"discovery_mode": "manual", "manual_address": "192.168.1.200"})
 
         result = await driver_setup_handler(msg)
 
@@ -202,11 +198,13 @@ class TestDriverSetupHandler:
             mac="00:11:22:33:44:55",
         )
 
-        msg = UserDataResponse(input_values={
-            "name": "My BluOS Player",
-            "volume_step": "10",
-            "timeout": "5",
-        })
+        msg = UserDataResponse(
+            input_values={
+                "name": "My BluOS Player",
+                "volume_step": "10",
+                "timeout": "5",
+            }
+        )
 
         result = await driver_setup_handler(msg)
 
@@ -230,11 +228,13 @@ class TestDriverSetupHandler:
             name="Player",
         )
 
-        msg = UserDataResponse(input_values={
-            "name": "Player",
-            "volume_step": "5",
-            "timeout": "5",
-        })
+        msg = UserDataResponse(
+            input_values={
+                "name": "Player",
+                "volume_step": "5",
+                "timeout": "5",
+            }
+        )
 
         result = await driver_setup_handler(msg)
 

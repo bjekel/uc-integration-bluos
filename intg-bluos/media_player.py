@@ -4,10 +4,10 @@ import logging
 from typing import Any
 
 import ucapi
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, States
-
-from bluos import BluOSPlayer, States as BluOSStates
+from bluos import BluOSPlayer
+from bluos import States as BluOSStates
 from config import BluOSDevice
+from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, States
 
 _LOG = logging.getLogger(__name__)
 
@@ -163,9 +163,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         }
         return state_map.get(bluos_state, States.UNKNOWN)
 
-    async def command(
-        self, cmd_id: str, params: dict[str, Any] | None = None
-    ) -> ucapi.StatusCodes:
+    async def command(self, cmd_id: str, params: dict[str, Any] | None = None) -> ucapi.StatusCodes:
         """
         Handle media player commands.
 

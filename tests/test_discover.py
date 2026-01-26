@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from discover import (
     BLUOS_SERVICE_TYPE,
     DEFAULT_PORT,

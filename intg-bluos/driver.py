@@ -7,14 +7,14 @@ import os
 import sys
 from typing import Any
 
-import ucapi
-from ucapi import EntityTypes
-
 import config
 import setup_flow
-from bluos import BluOSPlayer, Events as BluOSEvents
+import ucapi
+from bluos import BluOSPlayer
+from bluos import Events as BluOSEvents
 from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
+from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
 

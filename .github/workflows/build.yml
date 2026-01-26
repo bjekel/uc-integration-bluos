@@ -14,7 +14,7 @@ concurrency:
 
 env:
   INTG_NAME: bluos
-  PYTHON_VER: "3.11"
+  PYINSTALLER_TAG: "3.11.13"
 
 jobs:
   test:
@@ -25,7 +25,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -78,7 +78,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/src \
             --platform linux/arm64 \
-            docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYTHON_VER }} \
+            docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYINSTALLER_TAG }} \
             bash -c "cd /src && \
               pip install -r requirements.txt && \
               pyinstaller --clean --onedir \

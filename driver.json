@@ -1,0 +1,22 @@
+{
+  "driver_id": "bluos",
+  "version": "0.1.0",
+  "min_core_api": "0.20.0",
+  "name": {
+    "en": "BluOS Streaming Players",
+    "de": "BluOS Streaming-Player"
+  },
+  "icon": "uc:speaker",
+  "description": {
+    "en": "Control BluOS-enabled streaming players including Bluesound, NAD, and DALI devices",
+    "de": "Steuerung von BluOS-fähigen Streaming-Playern einschließlich Bluesound-, NAD- und DALI-Geräten"
+  },
+  "port": 8093,
+  "developer": {
+    "name": "Bart",
+    "url": "https://git.ffz.one/bart/uc-integration-bluos"
+  },
+  "home_page": "https://git.ffz.one/bart/uc-integration-bluos",
+  "setup_data_schema": {},
+  "release_date": "2026-01-26"
+}

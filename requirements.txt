@@ -1,0 +1,5 @@
+ucapi==0.5.1
+pyblu>=0.7.0
+pyee~=13.0.0
+zeroconf>=0.80.0
+aiohttp>=3.9.0

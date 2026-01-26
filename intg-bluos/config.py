@@ -1,0 +1,197 @@
+"""Configuration persistence for BluOS integration."""
+
+import dataclasses
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+_LOG = logging.getLogger(__name__)
+
+
+@dataclass
+class BluOSDevice:
+    """Configuration for a BluOS device."""
+
+    id: str
+    name: str
+    address: str
+    port: int = 11000
+    volume_step: int = 5
+    timeout: float = 5.0
+    model: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BluOSDevice":
+        """Create from dictionary."""
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            address=data["address"],
+            port=data.get("port", 11000),
+            volume_step=data.get("volume_step", 5),
+            timeout=data.get("timeout", 5.0),
+            model=data.get("model"),
+        )
+
+
+class _EnhancedJSONEncoder(json.JSONEncoder):
+    """JSON encoder that handles dataclasses."""
+
+    def default(self, o):
+        if dataclasses.is_dataclass(o):
+            return dataclasses.asdict(o)
+        return super().default(o)
+
+
+class Devices:
+    """Manager for configured BluOS devices."""
+
+    def __init__(
+        self,
+        data_path: str,
+        add_handler: Optional[Callable[[BluOSDevice], None]] = None,
+        remove_handler: Optional[Callable[[str], None]] = None,
+    ):
+        """
+        Initialize device manager.
+
+        Args:
+            data_path: Directory for storing configuration
+            add_handler: Callback when device is added
+            remove_handler: Callback when device is removed
+        """
+        self._data_path = data_path
+        self._config_file = os.path.join(data_path, "config.json")
+        self._devices: dict[str, BluOSDevice] = {}
+        self._add_handler = add_handler
+        self._remove_handler = remove_handler
+
+    @property
+    def data_path(self) -> str:
+        """Return data path."""
+        return self._data_path
+
+    def load(self) -> bool:
+        """
+        Load configuration from disk.
+
+        Returns:
+            True if configuration was loaded, False if file doesn't exist
+        """
+        if not os.path.exists(self._config_file):
+            _LOG.debug("No configuration file found at %s", self._config_file)
+            return False
+
+        try:
+            with open(self._config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            for device_data in data.get("devices", []):
+                device = BluOSDevice.from_dict(device_data)
+                self._devices[device.id] = device
+
+            _LOG.info("Loaded %d devices from configuration", len(self._devices))
+            return True
+        except (json.JSONDecodeError, KeyError) as e:
+            _LOG.error("Failed to load configuration: %s", e)
+            return False
+
+    def store(self) -> bool:
+        """
+        Persist configuration to disk.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            os.makedirs(self._data_path, exist_ok=True)
+            data = {"devices": list(self._devices.values())}
+            with open(self._config_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, cls=_EnhancedJSONEncoder, indent=2)
+            _LOG.debug("Configuration saved to %s", self._config_file)
+            return True
+        except OSError as e:
+            _LOG.error("Failed to save configuration: %s", e)
+            return False
+
+    def add_or_update(self, device: BluOSDevice) -> None:
+        """
+        Add or update a device configuration.
+
+        Args:
+            device: Device configuration to add/update
+        """
+        is_new = device.id not in self._devices
+        self._devices[device.id] = device
+        self.store()
+
+        if is_new and self._add_handler:
+            _LOG.info("Device added: %s (%s)", device.name, device.id)
+            self._add_handler(device)
+        else:
+            _LOG.info("Device updated: %s (%s)", device.name, device.id)
+
+    def remove(self, device_id: str) -> bool:
+        """
+        Remove a device configuration.
+
+        Args:
+            device_id: ID of device to remove
+
+        Returns:
+            True if device was removed, False if not found
+        """
+        if device_id not in self._devices:
+            return False
+
+        device = self._devices.pop(device_id)
+        self.store()
+
+        if self._remove_handler:
+            _LOG.info("Device removed: %s (%s)", device.name, device_id)
+            self._remove_handler(device_id)
+
+        return True
+
+    def get(self, device_id: str) -> Optional[BluOSDevice]:
+        """
+        Get device configuration by ID.
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            Device configuration or None if not found
+        """
+        device = self._devices.get(device_id)
+        if device:
+            return BluOSDevice(**dataclasses.asdict(device))
+        return None
+
+    def all(self) -> list[BluOSDevice]:
+        """Get all configured devices."""
+        return list(self._devices.values())
+
+    def contains(self, device_id: str) -> bool:
+        """Check if device is configured."""
+        return device_id in self._devices
+
+    def clear(self) -> None:
+        """Remove all devices."""
+        device_ids = list(self._devices.keys())
+        for device_id in device_ids:
+            self.remove(device_id)
+
+    def __len__(self) -> int:
+        """Return number of configured devices."""
+        return len(self._devices)
+
+    def __iter__(self):
+        """Iterate over configured devices."""
+        return iter(self._devices.values())

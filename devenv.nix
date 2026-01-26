@@ -15,6 +15,7 @@
   packages = with pkgs; [
     git
     gnumake
+    jq
   ];
 
   # Environment variables
@@ -43,6 +44,32 @@
 
     run.exec = ''
       python intg-bluos/driver.py
+    '';
+
+    build.exec = ''
+      echo "Building BluOS integration..."
+      pyinstaller --clean --onedir \
+        --name intg-bluos \
+        --add-data "driver.json:." \
+        intg-bluos/driver.py
+      echo "Build complete: dist/intg-bluos/"
+    '';
+
+    package.exec = ''
+      echo "Building and packaging..."
+      build
+      VERSION=$(jq -r '.version' driver.json)
+      ARCH=$(uname -m)
+      cd dist/intg-bluos
+      cp ../../driver.json ../../LICENSE .
+      echo "$VERSION" > version.txt
+      tar -czf "../uc-intg-bluos-$VERSION-$ARCH.tar.gz" .
+      echo "Package created: dist/uc-intg-bluos-$VERSION-$ARCH.tar.gz"
+    '';
+
+    clean.exec = ''
+      rm -rf dist/ build/ *.spec
+      echo "Build artifacts cleaned"
     '';
   };
 

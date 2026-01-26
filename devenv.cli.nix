@@ -8,11 +8,12 @@
     vim
     tmux
     jq
+    python311Packages.pyinstaller
   ];
 
   enterShell = ''
     echo "BluOS Integration - CLI Development Environment"
-    echo "Commands: run, test, lint, format"
+    echo "Commands: run, test, lint, format, build, package, clean"
     echo ""
   '';
 }

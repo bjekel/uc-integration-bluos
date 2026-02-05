@@ -141,6 +141,48 @@
       '';
       description = "Setup Qemu for aarch64 emulation (x86-64 only)";
     };
+
+    register-integration = {
+      exec = ''
+        # Get port from driver.json
+        PORT=$(jq -r '.port' driver.json)
+        VERSION=$(jq -r '.version' driver.json)
+
+        # Get local IP address (first non-loopback IPv4)
+        IP=$(hostname -I | awk '{print $1}')
+
+        if [ -z "$IP" ]; then
+          echo "Error: Could not determine local IP address"
+          exit 1
+        fi
+
+        DRIVER_URL="ws://$IP:$PORT"
+        echo "Registering integration with driver_url: $DRIVER_URL"
+
+        curl --location 'http://localhost:8080/api/intg/drivers' \
+          --user "web-configurator:1234" \
+          --header 'Content-Type: application/json' \
+          --data "$(cat <<EOF
+{
+  "name": {
+    "en": "BluOS driver"
+  },
+  "driver_url": "$DRIVER_URL",
+  "version": "$VERSION",
+  "icon": "uc:speaker",
+  "enabled": true,
+  "description": {
+    "en": "Control BluOS-enabled streaming players"
+  },
+  "device_discovery": false,
+  "setup_data_schema": {},
+  "release_date": "2026-01-26"
+}
+EOF
+)"
+      '';
+      description = "Register integration with Unfolded Circle remote";
+    };
   };
 
   # Git hooks

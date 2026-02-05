@@ -35,6 +35,7 @@
     docker-buildx
     qemu
     qemu-utils
+    websocat
   ];
 
   # Environment variables

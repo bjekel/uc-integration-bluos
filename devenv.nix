@@ -70,6 +70,7 @@
       echo "Building BluOS integration for host architecture..."
       pyinstaller --clean --onedir \
         --name driver \
+        --paths intg-bluos \
         --add-data "driver.json:." \
         intg-bluos/driver.py
       echo "Build complete: dist/driver/"
@@ -105,6 +106,7 @@
         python -m pip install --user -r requirements.txt && \
         PYTHONPATH=~/.local/lib/python''${PYTHON_VERSION}/site-packages:$PYTHONPATH \
         pyinstaller --clean --onedir --name driver -y \
+        --paths intg-bluos \
         --add-data driver.json:. \
         intg-bluos/driver.py'
       echo "Build complete: dist/driver/"
@@ -114,7 +116,7 @@
       echo "Building and packaging for aarch64..."
       build-aarch64
       VERSION=$(jq -r '.version' driver.json)
-      ARCH=arm64
+      ARCH=aarch64
       cd dist/driver
       mkdir -p bin
       mv driver _internal bin/

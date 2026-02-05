@@ -68,10 +68,10 @@
     build.exec = ''
       echo "Building BluOS integration for host architecture..."
       pyinstaller --clean --onedir \
-        --name intg-bluos \
+        --name driver \
         --add-data "driver.json:." \
         intg-bluos/driver.py
-      echo "Build complete: dist/intg-bluos/"
+      echo "Build complete: dist/driver/"
     '';
 
     package.exec = ''
@@ -79,9 +79,9 @@
       build
       VERSION=$(jq -r '.version' driver.json)
       ARCH=$(uname -m)
-      cd dist/intg-bluos
+      cd dist/driver
       mkdir -p bin
-      mv intg-bluos _internal bin/
+      mv driver _internal bin/
       cp ../../driver.json ../../LICENSE .
       echo "$VERSION" > version.txt
       tar -czf "../uc-intg-bluos-$VERSION-$ARCH.tar.gz" .
@@ -103,10 +103,10 @@
         bash -c 'PYTHON_VERSION=$(python --version | cut -d" " -f2 | cut -d. -f1,2) && \
         python -m pip install --user -r requirements.txt && \
         PYTHONPATH=~/.local/lib/python''${PYTHON_VERSION}/site-packages:$PYTHONPATH \
-        pyinstaller --clean --onedir --name intg-bluos -y \
+        pyinstaller --clean --onedir --name driver -y \
         --add-data driver.json:. \
         intg-bluos/driver.py'
-      echo "Build complete: dist/intg-bluos/"
+      echo "Build complete: dist/driver/"
     '';
 
     package-aarch64.exec = ''
@@ -114,9 +114,9 @@
       build-aarch64
       VERSION=$(jq -r '.version' driver.json)
       ARCH=arm64
-      cd dist/intg-bluos
+      cd dist/driver
       mkdir -p bin
-      mv intg-bluos _internal bin/
+      mv driver _internal bin/
       cp ../../driver.json ../../LICENSE .
       echo "$VERSION" > version.txt
       tar -czf "../uc-intg-bluos-$VERSION-$ARCH.tar.gz" .

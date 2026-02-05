@@ -84,9 +84,18 @@ async def _handle_setup_request(msg: DriverSetupRequest) -> SetupAction:
         _setup_step = SetupSteps.CONFIGURATION_MODE
         return _show_configuration_mode()
 
-    # Start discovery for new setup
+    # Check setup mode from initial form
+    setup_mode = msg.setup_data.get("setup_mode", "discover") if msg.setup_data else "discover"
+    _LOG.info("Setup mode: %s", setup_mode)
+
+    if setup_mode == "manual":
+        # Show manual IP entry form
+        _setup_step = SetupSteps.DISCOVER
+        return _show_manual_entry()
+
+    # Start auto discovery
     _setup_step = SetupSteps.DISCOVER
-    return _show_discovery_options()
+    return await _start_discovery()
 
 
 async def _handle_user_data(msg: UserDataResponse) -> SetupAction:
@@ -198,26 +207,44 @@ def _show_discovery_options() -> SetupAction:
     )
 
 
-async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
-    """Handle discovery options."""
+def _show_manual_entry() -> SetupAction:
+    """Show manual IP/port entry form."""
+    return RequestUserInput(
+        {"en": "Manual Device Entry", "de": "Manuelle Geräteeingabe"},
+        [
+            {
+                "id": "manual_address",
+                "label": {
+                    "en": "IP Address",
+                    "de": "IP-Adresse",
+                },
+                "field": {"text": {"value": ""}},
+            },
+            {
+                "id": "manual_port",
+                "label": {
+                    "en": "Port",
+                    "de": "Port",
+                },
+                "field": {
+                    "number": {
+                        "value": 11000,
+                        "min": 1,
+                        "max": 65535,
+                        "steps": 1,
+                    }
+                },
+            },
+        ],
+    )
+
+
+async def _start_discovery() -> SetupAction:
+    """Start auto discovery and show results."""
     global _setup_step, _discovered_devices
 
-    discovery_mode = msg.input_values.get("discovery_mode", "auto")
-    manual_address = msg.input_values.get("manual_address", "").strip()
-
-    if discovery_mode == "manual" and manual_address:
-        # Manual IP entry
-        _discovered_devices = [
-            DiscoveredDevice(
-                host=manual_address,
-                port=11000,
-                name=f"BluOS Player ({manual_address})",
-            )
-        ]
-    else:
-        # Auto discovery
-        _LOG.info("Starting BluOS device discovery...")
-        _discovered_devices = await discover_bluos_players(timeout=5.0)
+    _LOG.info("Starting BluOS device discovery...")
+    _discovered_devices = await discover_bluos_players(timeout=5.0)
 
     if not _discovered_devices:
         return RequestUserInput(
@@ -260,6 +287,43 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
 
     _setup_step = SetupSteps.DEVICE_CHOICE
     return _show_device_choice()
+
+
+async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
+    """Handle discovery step responses."""
+    global _setup_step, _discovered_devices
+
+    # Check if this is a retry response
+    retry = msg.input_values.get("retry")
+    if retry:
+        if retry == "yes":
+            return await _start_discovery()
+        elif retry == "manual":
+            return _show_manual_entry()
+        else:  # "no" - cancel
+            return SetupComplete()
+
+    # Check if this is a manual entry response
+    manual_address = msg.input_values.get("manual_address", "").strip()
+    if manual_address:
+        manual_port = int(msg.input_values.get("manual_port", 11000))
+        _discovered_devices = [
+            DiscoveredDevice(
+                host=manual_address,
+                port=manual_port,
+                name=f"BluOS Player ({manual_address}:{manual_port})",
+            )
+        ]
+        _setup_step = SetupSteps.DEVICE_CHOICE
+        return _show_device_choice()
+
+    # Check if this is from discovery options (legacy flow)
+    discovery_mode = msg.input_values.get("discovery_mode", "auto")
+    if discovery_mode == "manual":
+        return _show_manual_entry()
+
+    # Auto discovery
+    return await _start_discovery()
 
 
 def _show_device_choice() -> SetupAction:

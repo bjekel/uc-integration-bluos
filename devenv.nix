@@ -144,9 +144,10 @@
 
     register-integration = {
       exec = ''
-        # Get port from driver.json
+        # Get values from driver.json
         PORT=$(jq -r '.port' driver.json)
         VERSION=$(jq -r '.version' driver.json)
+        SETUP_SCHEMA=$(jq -c '.setup_data_schema' driver.json)
 
         # Get local IP address (first non-loopback IPv4)
         IP=$(hostname -I | awk '{print $1}')
@@ -162,24 +163,61 @@
         curl --location 'http://localhost:8080/api/intg/drivers' \
           --user "web-configurator:REDACTED" \
           --header 'Content-Type: application/json' \
-          --data "$(cat <<EOF
-{
-  "name": {
-    "en": "BluOS driver"
-  },
-  "driver_url": "$DRIVER_URL",
-  "version": "$VERSION",
-  "icon": "uc:speaker",
-  "enabled": true,
-  "description": {
-    "en": "Control BluOS-enabled streaming players"
-  },
-  "device_discovery": false,
-  "setup_data_schema": {},
-  "release_date": "2026-01-26"
-}
-EOF
-)"
+          --data "$(jq -n \
+            --arg driver_url "$DRIVER_URL" \
+            --arg version "$VERSION" \
+            --argjson setup_schema "$SETUP_SCHEMA" \
+            '{
+              "name": {"en": "BluOS driver"},
+              "driver_url": $driver_url,
+              "version": $version,
+              "icon": "uc:speaker",
+              "enabled": true,
+              "description": {"en": "Control BluOS-enabled streaming players"},
+              "device_discovery": false,
+              "setup_data_schema": $setup_schema,
+              "release_date": "2026-01-26"
+            }')"
+      '';
+      description = "Register integration with Unfolded Circle remote";
+    };
+
+    register-integration-remote = {
+      exec = ''
+        # Get values from driver.json
+        PORT=$(jq -r '.port' driver.json)
+        VERSION=$(jq -r '.version' driver.json)
+        SETUP_SCHEMA=$(jq -c '.setup_data_schema' driver.json)
+
+        # Get local IP address (first non-loopback IPv4)
+        IP=$(hostname -I | awk '{print $1}')
+
+        if [ -z "$IP" ]; then
+          echo "Error: Could not determine local IP address"
+          exit 1
+        fi
+
+        DRIVER_URL="ws://$IP:$PORT"
+        echo "Registering integration with driver_url: $DRIVER_URL"
+
+        curl --location 'http://REDACTED-HOST/api/intg/drivers' \
+          --user "web-configurator:REDACTED" \
+          --header 'Content-Type: application/json' \
+          --data "$(jq -n \
+            --arg driver_url "$DRIVER_URL" \
+            --arg version "$VERSION" \
+            --argjson setup_schema "$SETUP_SCHEMA" \
+            '{
+              "name": {"en": "BluOS driver"},
+              "driver_url": $driver_url,
+              "version": $version,
+              "icon": "uc:speaker",
+              "enabled": true,
+              "description": {"en": "Control BluOS-enabled streaming players"},
+              "device_discovery": false,
+              "setup_data_schema": $setup_schema,
+              "release_date": "2026-01-26"
+            }')"
       '';
       description = "Register integration with Unfolded Circle remote";
     };

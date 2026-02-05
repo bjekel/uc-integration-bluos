@@ -217,8 +217,18 @@ async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     # Check if setup completed with device data
     if isinstance(result, ucapi.SetupComplete):
         device = setup_flow.get_configured_device()
-        if device and _devices:
-            _devices.add_or_update(device)
+        if device and _devices is not None:
+            # Check if this is a new device before adding
+            is_new = not _devices.contains(device.id)
+
+            # Add device to config (don't use callback for new devices - we'll await it)
+            _devices._devices[device.id] = device
+            _devices.store()
+
+            # Add player and wait for entity registration
+            if is_new:
+                _LOG.info("New device configured: %s (%s)", device.name, device.id)
+                await _add_player(device)
 
     return result
 
@@ -283,15 +293,14 @@ async def _main() -> None:
     for device in _devices.all():
         await _add_player(device)
 
-    # Set up API handlers
-    api.setup_handler = _setup_handler
+    # Set up entity command handler
     api.entity_command_handler = _entity_command_handler
 
     # Start background status poller
     _LOOP.create_task(_status_poller())
 
-    # Run the integration API
-    await api.init("driver.json")
+    # Run the integration API with setup handler
+    await api.init("driver.json", _setup_handler)
 
 
 if __name__ == "__main__":

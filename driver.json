@@ -17,6 +17,41 @@
     "url": "https://REDACTED.invalid/bart/uc-integration-bluos"
   },
   "home_page": "https://REDACTED.invalid/bart/uc-integration-bluos",
-  "setup_data_schema": {},
+  "setup_data_schema": {
+    "title": {
+      "en": "BluOS Integration",
+      "de": "BluOS Integration"
+    },
+    "settings": [
+      {
+        "id": "setup_mode",
+        "label": {
+          "en": "Setup Mode",
+          "de": "Einrichtungsmodus"
+        },
+        "field": {
+          "dropdown": {
+            "value": "discover",
+            "items": [
+              {
+                "id": "discover",
+                "label": {
+                  "en": "Discover devices automatically",
+                  "de": "Geräte automatisch erkennen"
+                }
+              },
+              {
+                "id": "manual",
+                "label": {
+                  "en": "Enter IP address manually",
+                  "de": "IP-Adresse manuell eingeben"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
   "release_date": "2026-01-26"
 }

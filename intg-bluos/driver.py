@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import os
+import sys
 from typing import Any
 
 import setup_flow
@@ -30,6 +31,31 @@ _devices: Devices | None = None
 
 # Remote state
 _REMOTE_IN_STANDBY = False
+
+
+def _get_driver_path() -> str:
+    """Get the path to driver.json, handling PyInstaller bundles."""
+    _LOG.debug("sys.executable: %s", sys.executable)
+    _LOG.debug("cwd: %s", os.getcwd())
+
+    # Check multiple possible locations for driver.json
+    candidates = [
+        # Current working directory (UC Remote sets cwd to package root)
+        "driver.json",
+        # Relative to executable's parent (package_root/bin/driver -> package_root/driver.json)
+        os.path.join(os.path.dirname(os.path.dirname(sys.executable)), "driver.json"),
+        # Same directory as executable
+        os.path.join(os.path.dirname(sys.executable), "driver.json"),
+    ]
+
+    for path in candidates:
+        _LOG.debug("Checking for driver.json at: %s (exists: %s)", path, os.path.isfile(path))
+        if os.path.isfile(path):
+            _LOG.info("Found driver.json at: %s", path)
+            return path
+
+    _LOG.warning("driver.json not found in any expected location, using fallback")
+    return "driver.json"
 
 
 def _on_device_added(device: BluOSDevice) -> None:
@@ -300,7 +326,7 @@ async def _main() -> None:
     _LOOP.create_task(_status_poller())
 
     # Run the integration API with setup handler
-    await api.init("driver.json", _setup_handler)
+    await api.init(_get_driver_path(), _setup_handler)
 
 
 if __name__ == "__main__":

@@ -115,11 +115,28 @@ async def _remove_player(device_id: str) -> None:
             api.configured_entities.remove(entity.id)
 
 
+def _any_player_connected() -> bool:
+    """Check if any player is currently connected."""
+    return any(player.available for player in _configured_players.values())
+
+
+async def _update_device_state() -> None:
+    """Update the integration device state based on player connections."""
+    connected = _any_player_connected()
+    new_state = ucapi.DeviceStates.CONNECTED if connected else ucapi.DeviceStates.DISCONNECTED
+    _LOG.debug("Updating device state to %s (any player connected: %s)", new_state, connected)
+    await api.set_device_state(new_state)
+
+
 def _on_player_connected(device_id: str) -> None:
     """Handle player connected event."""
     _LOG.info("Player connected: %s", device_id)
+    # Log current player states for debugging
+    for pid, player in _configured_players.items():
+        _LOG.debug("Player %s available: %s", pid, player.available)
+    # Update integration device state
+    _LOOP.create_task(_update_device_state())
     if device_id in _entities:
-        entity = _entities[device_id]
         # Trigger initial status poll
         _LOOP.create_task(_poll_player(device_id))
 
@@ -127,6 +144,8 @@ def _on_player_connected(device_id: str) -> None:
 def _on_player_disconnected(device_id: str) -> None:
     """Handle player disconnected event."""
     _LOG.info("Player disconnected: %s", device_id)
+    # Update integration device state
+    _LOOP.create_task(_update_device_state())
     if device_id in _entities:
         entity = _entities[device_id]
         changed = entity.set_unavailable()
@@ -165,6 +184,15 @@ async def _status_poller(interval: float = 10.0) -> None:
                     await player.poll_status(use_etag=True)
                 except Exception as e:
                     _LOG.error("Error polling %s: %s", device_id, e)
+            else:
+                # Try to reconnect unavailable players
+                _LOG.debug("Player %s unavailable, attempting reconnect", device_id)
+                try:
+                    connected = await player.connect()
+                    if connected:
+                        _LOG.info("Reconnected to player %s via poller", device_id)
+                except Exception as e:
+                    _LOG.debug("Reconnect attempt failed for %s: %s", device_id, e)
 
         await asyncio.sleep(interval)
 
@@ -177,9 +205,16 @@ async def _on_connect() -> None:
     """Handle UC Remote connect event."""
     _LOG.info("UC Remote connected")
 
-    for player in _configured_players.values():
-        if not player.available:
-            await player.connect()
+    # Set connecting state if we have players to connect
+    players_to_connect = [p for p in _configured_players.values() if not p.available]
+    if players_to_connect:
+        await api.set_device_state(ucapi.DeviceStates.CONNECTING)
+
+    for player in players_to_connect:
+        await player.connect()
+
+    # Update device state after connection attempts
+    await _update_device_state()
 
 
 @api.listens_to(ucapi.Events.DISCONNECT)
@@ -194,6 +229,8 @@ async def _on_enter_standby() -> None:
     global _REMOTE_IN_STANDBY
     _LOG.info("UC Remote entering standby")
     _REMOTE_IN_STANDBY = True
+    # Report disconnected state during standby
+    await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
 
 @api.listens_to(ucapi.Events.EXIT_STANDBY)
@@ -203,10 +240,17 @@ async def _on_exit_standby() -> None:
     _LOG.info("UC Remote exiting standby")
     _REMOTE_IN_STANDBY = False
 
+    # Set connecting state if we have players to reconnect
+    players_to_connect = [p for p in _configured_players.values() if not p.available]
+    if players_to_connect:
+        await api.set_device_state(ucapi.DeviceStates.CONNECTING)
+
     # Reconnect players
-    for player in _configured_players.values():
-        if not player.available:
-            await player.connect()
+    for player in players_to_connect:
+        await player.connect()
+
+    # Update device state after reconnection attempts
+    await _update_device_state()
 
 
 @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)
@@ -316,8 +360,13 @@ async def _main() -> None:
     _devices.load()
 
     # Register existing devices
+    if _devices.all():
+        await api.set_device_state(ucapi.DeviceStates.CONNECTING)
     for device in _devices.all():
         await _add_player(device)
+
+    # Update device state after initial player setup
+    await _update_device_state()
 
     # Set up entity command handler
     api.entity_command_handler = _entity_command_handler

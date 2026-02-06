@@ -255,8 +255,18 @@ class BluOSPlayer:
             _LOG.error("Error polling %s: %s", self._device.name, e)
             return None
 
+    def _get_absolute_image_url(self, image: str | None) -> str:
+        """Convert relative image URL to absolute URL."""
+        if not image:
+            return ""
+        if image.startswith(("http://", "https://")):
+            return image
+        base = f"http://{self._device.address}:{self._device.port}"
+        return f"{base}{image}" if image.startswith("/") else f"{base}/{image}"
+
     def _status_to_attributes(self, status: Status) -> dict[str, Any]:
         """Convert pyblu Status to UC attributes."""
+        image_url = self._get_absolute_image_url(status.image)
         return {
             "state": self._map_state(status.state),
             "volume": status.volume,
@@ -264,7 +274,7 @@ class BluOSPlayer:
             "media_title": status.name or "",
             "media_artist": status.artist or "",
             "media_album": status.album or "",
-            "media_image_url": status.image or "",
+            "media_image_url": image_url,
             "media_duration": status.total_seconds or 0,
             "media_position": status.seconds or 0,
             "shuffle": status.shuffle or False,

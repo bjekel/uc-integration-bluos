@@ -134,8 +134,8 @@ class BluOSPlayer:
             self._available = True
             self._reconnect_delay = MIN_RECONNECT_DELAY
             self._connecting = False
+            _LOG.info("Connected to %s at %s, emitting CONNECTED event", self._device.name, self._device.address)
             self._events.emit(Events.CONNECTED)
-            _LOG.info("Connected to %s at %s", self._device.name, self._device.address)
             return True
 
         except PlayerUnreachableError as e:
@@ -187,7 +187,12 @@ class BluOSPlayer:
             )
             await asyncio.sleep(self._reconnect_delay)
             self._reconnect_delay = min(self._reconnect_delay * BACKOFF_FACTOR, MAX_RECONNECT_DELAY)
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                # Catch-all to ensure reconnect keeps trying
+                _LOG.error("Unexpected error during reconnect to %s: %s", self._device.name, e)
+                self._schedule_reconnect()
 
         self._reconnect_task = self._loop.create_task(reconnect())
 

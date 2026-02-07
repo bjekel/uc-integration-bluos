@@ -413,6 +413,21 @@ def _show_device_configure() -> SetupAction:
                     }
                 },
             },
+            {
+                "id": "standby_timeout",
+                "label": {
+                    "en": "Standby Timeout (seconds)",
+                    "de": "Standby-Timeout (Sekunden)",
+                },
+                "field": {
+                    "number": {
+                        "value": 60,
+                        "min": 15,
+                        "max": 300,
+                        "steps": 15,
+                    }
+                },
+            },
         ],
     )
 
@@ -427,6 +442,7 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
     name = msg.input_values.get("name", _selected_device.name)
     volume_step = int(msg.input_values.get("volume_step", 5))
     timeout = float(msg.input_values.get("timeout", 5))
+    standby_timeout = int(msg.input_values.get("standby_timeout", 60))
 
     # Create device configuration
     # Use MAC if available, otherwise generate from IP
@@ -439,6 +455,7 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
         port=_selected_device.port,
         volume_step=volume_step,
         timeout=timeout,
+        standby_timeout=standby_timeout,
         model=_selected_device.model,
     )
 

@@ -20,6 +20,7 @@ class BluOSDevice:
     port: int = 11000
     volume_step: int = 5
     timeout: float = 5.0
+    standby_timeout: int = 60
     model: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -36,6 +37,7 @@ class BluOSDevice:
             port=data.get("port", 11000),
             volume_step=data.get("volume_step", 5),
             timeout=data.get("timeout", 5.0),
+            standby_timeout=data.get("standby_timeout", 60),
             model=data.get("model"),
         )
 

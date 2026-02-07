@@ -171,17 +171,23 @@ async def _poll_player(device_id: str) -> None:
     await player.poll_status(use_etag=False)  # Initial poll without etag
 
 
-async def _status_poller(interval: float = 10.0) -> None:
-    """Background task to poll player status."""
+async def _status_poller() -> None:
+    """Background task to poll player status using long-polling."""
     while True:
         if _REMOTE_IN_STANDBY:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(10)
             continue
 
+        if not _configured_players:
+            await asyncio.sleep(5)
+            continue
+
+        polled_any = False
         for device_id, player in list(_configured_players.items()):
             if player.available:
                 try:
                     await player.poll_status(use_etag=True)
+                    polled_any = True
                 except Exception as e:
                     _LOG.error("Error polling %s: %s", device_id, e)
             else:
@@ -194,7 +200,9 @@ async def _status_poller(interval: float = 10.0) -> None:
                 except Exception as e:
                     _LOG.debug("Reconnect attempt failed for %s: %s", device_id, e)
 
-        await asyncio.sleep(interval)
+        # Small delay if no players were polled to prevent tight loop during reconnection
+        if not polled_any:
+            await asyncio.sleep(5)
 
 
 # UC API Event Handlers

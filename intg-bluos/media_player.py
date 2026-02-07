@@ -7,7 +7,7 @@ import ucapi
 from bluos import BluOSPlayer
 from bluos import States as BluOSStates
 from config import BluOSDevice
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, States
+from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, States
 
 _LOG = logging.getLogger(__name__)
 
@@ -53,6 +53,9 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         entity_id = f"bluos_{device.id}"
         name = device.name
 
+        # Build options with simple commands for presets
+        options = {Options.SIMPLE_COMMANDS: player.get_simple_commands()}
+
         super().__init__(
             entity_id,
             name,
@@ -72,6 +75,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 Attributes.SOURCE_LIST: [],
             },
             device_class=DeviceClasses.SPEAKER,
+            options=options,
         )
 
         self._device = device
@@ -152,6 +156,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         """Clear cached attributes to force full update on next poll."""
         self._last_attributes.clear()
 
+    def update_options(self) -> dict[str, Any]:
+        """Update and return entity options with current simple commands."""
+        self.options = {Options.SIMPLE_COMMANDS: self._player.get_simple_commands()}
+        return self.options
+
     @staticmethod
     def _map_state(bluos_state: BluOSStates) -> States:
         """Map BluOS state to UC state."""
@@ -183,6 +192,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
         if not self._player.available:
             return ucapi.StatusCodes.SERVICE_UNAVAILABLE
+
+        # Check if it's a simple preset command
+        if cmd_id.startswith("PRESET_"):
+            result = await self._player.load_preset_by_command(cmd_id)
+            return ucapi.StatusCodes.OK if result else ucapi.StatusCodes.SERVER_ERROR
 
         result = False
 

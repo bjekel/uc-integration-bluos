@@ -137,6 +137,9 @@ def _on_player_connected(device_id: str) -> None:
     # Update integration device state
     _LOOP.create_task(_update_device_state())
     if device_id in _entities:
+        entity = _entities[device_id]
+        # Update simple commands with current presets
+        entity.update_options()
         # Trigger initial status poll
         _LOOP.create_task(_poll_player(device_id))
 

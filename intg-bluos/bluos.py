@@ -230,7 +230,8 @@ class BluOSPlayer:
 
         try:
             etag = self._last_etag if use_etag else None
-            status = await self._player.status(etag=etag, poll_timeout=10, timeout=15)
+            poll_timeout = self._device.standby_timeout
+            status = await self._player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
             self._last_etag = status.etag
 
             attributes = self._status_to_attributes(status)

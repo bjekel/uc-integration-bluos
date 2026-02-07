@@ -338,6 +338,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.skip()
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Skip failed: %s", e)
@@ -349,6 +350,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.back()
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Back failed: %s", e)

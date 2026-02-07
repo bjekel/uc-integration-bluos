@@ -148,6 +148,10 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             return {Attributes.STATE: States.UNAVAILABLE}
         return {}
 
+    def clear_cached_attributes(self) -> None:
+        """Clear cached attributes to force full update on next poll."""
+        self._last_attributes.clear()
+
     @staticmethod
     def _map_state(bluos_state: BluOSStates) -> States:
         """Map BluOS state to UC state."""

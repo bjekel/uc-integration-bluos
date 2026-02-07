@@ -253,12 +253,22 @@ async def _on_exit_standby() -> None:
     if players_to_connect:
         await api.set_device_state(ucapi.DeviceStates.CONNECTING)
 
-    # Reconnect players
+    # Reconnect players that are not available
     for player in players_to_connect:
         await player.connect()
 
     # Update device state after reconnection attempts
     await _update_device_state()
+
+    # Force refresh status for all available players
+    # Clear cached attributes so all current values are sent to the remote
+    for device_id, entity in _entities.items():
+        entity.clear_cached_attributes()
+        if device_id in _configured_players:
+            player = _configured_players[device_id]
+            if player.available:
+                _LOG.debug("Refreshing status for %s after standby exit", device_id)
+                await player.poll_status(use_etag=False)
 
 
 @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)

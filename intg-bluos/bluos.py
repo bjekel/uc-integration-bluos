@@ -447,17 +447,23 @@ class BluOSPlayer:
         Select input source or preset.
 
         Args:
-            source_id: Source identifier (input ID or preset ID prefixed with 'preset:')
+            source_id: Source identifier (input ID, preset name, or legacy 'preset:N')
         """
         if not self._player or not self._available:
             return False
 
         try:
-            # Check if it's a preset
+            # Legacy format: preset:N
             if source_id.startswith("preset:"):
                 preset_id = source_id[7:]  # Remove 'preset:' prefix
                 await self._player.load_preset(int(preset_id))
                 return True
+
+            # Check if it's a preset name
+            for preset in self._presets:
+                if preset.name == source_id:
+                    await self._player.load_preset(preset.id)
+                    return True
 
             # Find input by ID or name
             for inp in self._inputs:
@@ -472,6 +478,28 @@ class BluOSPlayer:
             _LOG.error("Select source failed: %s", e)
             return False
 
+    async def load_preset_by_command(self, command: str) -> bool:
+        """
+        Load preset by simple command ID.
+
+        Args:
+            command: Simple command ID (e.g., "PRESET_1")
+        """
+        if not self._player or not self._available:
+            return False
+
+        if not command.startswith("PRESET_"):
+            _LOG.warning("Invalid preset command: %s", command)
+            return False
+
+        try:
+            preset_id = int(command[7:])  # Remove "PRESET_" prefix
+            await self._player.load_preset(preset_id)
+            return True
+        except (ValueError, PlayerError) as e:
+            _LOG.error("Load preset by command failed: %s", e)
+            return False
+
     def get_source_list(self) -> list[str]:
         """Get list of available sources (inputs + presets)."""
         sources = []
@@ -480,11 +508,15 @@ class BluOSPlayer:
         for inp in self._inputs:
             sources.append(inp.id or inp.text)
 
-        # Add presets with prefix
+        # Add presets with display names
         for preset in self._presets:
-            sources.append(f"preset:{preset.id}")
+            sources.append(preset.name)
 
         return sources
+
+    def get_simple_commands(self) -> list[str]:
+        """Get list of simple commands for presets."""
+        return [f"PRESET_{preset.id}" for preset in self._presets]
 
     # Multi-room grouping methods
 

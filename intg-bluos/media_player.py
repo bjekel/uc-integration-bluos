@@ -198,6 +198,17 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             result = await self._player.load_preset_by_command(cmd_id)
             return ucapi.StatusCodes.OK if result else ucapi.StatusCodes.SERVER_ERROR
 
+        # Handle refresh presets command
+        if cmd_id == "REFRESH_PRESETS":
+            result = await self._player.refresh_presets()
+            if result:
+                # Update options with new preset commands
+                self.update_options()
+                # Clear cached source list so next poll sends update to UC Remote
+                self._last_attributes.pop(Attributes.SOURCE_LIST, None)
+                return ucapi.StatusCodes.OK
+            return ucapi.StatusCodes.SERVER_ERROR
+
         result = False
 
         match cmd_id:

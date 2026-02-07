@@ -516,7 +516,22 @@ class BluOSPlayer:
 
     def get_simple_commands(self) -> list[str]:
         """Get list of simple commands for presets."""
-        return [f"PRESET_{preset.id}" for preset in self._presets]
+        commands = [f"PRESET_{preset.id}" for preset in self._presets]
+        commands.append("REFRESH_PRESETS")
+        return commands
+
+    async def refresh_presets(self) -> bool:
+        """Refresh the list of available presets from the device."""
+        if not self._player or not self._available:
+            return False
+
+        try:
+            self._presets = await self._player.presets()
+            _LOG.info("Refreshed %d presets for %s", len(self._presets), self._device.name)
+            return True
+        except PlayerError as e:
+            _LOG.error("Failed to refresh presets: %s", e)
+            return False
 
     # Multi-room grouping methods
 

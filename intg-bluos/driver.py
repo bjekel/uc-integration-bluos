@@ -17,6 +17,10 @@ from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
 
+# Polling intervals (in seconds)
+STANDBY_POLL_INTERVAL = 10
+NO_PLAYERS_POLL_INTERVAL = 5
+
 # Event loop
 _LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(_LOOP)
@@ -178,11 +182,11 @@ async def _status_poller() -> None:
     """Background task to poll player status using long-polling."""
     while True:
         if _REMOTE_IN_STANDBY:
-            await asyncio.sleep(10)
+            await asyncio.sleep(STANDBY_POLL_INTERVAL)
             continue
 
         if not _configured_players:
-            await asyncio.sleep(5)
+            await asyncio.sleep(NO_PLAYERS_POLL_INTERVAL)
             continue
 
         polled_any = False
@@ -205,7 +209,7 @@ async def _status_poller() -> None:
 
         # Small delay if no players were polled to prevent tight loop during reconnection
         if not polled_any:
-            await asyncio.sleep(5)
+            await asyncio.sleep(NO_PLAYERS_POLL_INTERVAL)
 
 
 # UC API Event Handlers
@@ -309,12 +313,8 @@ async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     if isinstance(result, ucapi.SetupComplete):
         device = setup_flow.get_configured_device()
         if device and _devices is not None:
-            # Check if this is a new device before adding
-            is_new = not _devices.contains(device.id)
-
-            # Add device to config (don't use callback for new devices - we'll await it)
-            _devices._devices[device.id] = device
-            _devices.store()
+            # Add device to config (don't trigger callback - we'll await _add_player directly)
+            is_new = _devices.add_or_update(device, trigger_callbacks=False)
 
             # Add player and wait for entity registration
             if is_new:

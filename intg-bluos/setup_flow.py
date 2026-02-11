@@ -1,10 +1,16 @@
 """Setup flow for BluOS integration."""
 
+import ipaddress
 import logging
 from enum import IntEnum
 from typing import Any
 
 from config import BluOSDevice
+
+# Validation constants
+MIN_PORT = 1
+MAX_PORT = 65535
+DEFAULT_BLUOS_PORT = 11000
 from discover import DiscoveredDevice, discover_bluos_players
 from ucapi import (
     AbortDriverSetup,
@@ -18,6 +24,20 @@ from ucapi import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _is_valid_ip_address(address: str) -> bool:
+    """Validate IP address format (IPv4 or IPv6)."""
+    try:
+        ipaddress.ip_address(address)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_valid_port(port: int) -> bool:
+    """Validate port is within valid range."""
+    return MIN_PORT <= port <= MAX_PORT
 
 
 class SetupSteps(IntEnum):
@@ -228,9 +248,9 @@ def _show_manual_entry() -> SetupAction:
                 },
                 "field": {
                     "number": {
-                        "value": 11000,
-                        "min": 1,
-                        "max": 65535,
+                        "value": DEFAULT_BLUOS_PORT,
+                        "min": MIN_PORT,
+                        "max": MAX_PORT,
                         "steps": 1,
                     }
                 },
@@ -306,7 +326,45 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
     # Check if this is a manual entry response
     manual_address = msg.input_values.get("manual_address", "").strip()
     if manual_address:
-        manual_port = int(msg.input_values.get("manual_port", 11000))
+        # Validate IP address format
+        if not _is_valid_ip_address(manual_address):
+            _LOG.warning("Invalid IP address format: %s", manual_address)
+            return RequestUserInput(
+                {"en": "Invalid IP Address", "de": "Ungültige IP-Adresse"},
+                [
+                    {
+                        "id": "manual_address",
+                        "label": {
+                            "en": "Please enter a valid IP address",
+                            "de": "Bitte geben Sie eine gültige IP-Adresse ein",
+                        },
+                        "field": {"text": {"value": manual_address}},
+                    },
+                    {
+                        "id": "manual_port",
+                        "label": {"en": "Port", "de": "Port"},
+                        "field": {
+                            "number": {
+                                "value": DEFAULT_BLUOS_PORT,
+                                "min": MIN_PORT,
+                                "max": MAX_PORT,
+                                "steps": 1,
+                            }
+                        },
+                    },
+                ],
+            )
+
+        # Parse and validate port
+        try:
+            manual_port = int(msg.input_values.get("manual_port", DEFAULT_BLUOS_PORT))
+        except (ValueError, TypeError):
+            manual_port = DEFAULT_BLUOS_PORT
+
+        if not _is_valid_port(manual_port):
+            _LOG.warning("Invalid port: %s", manual_port)
+            manual_port = DEFAULT_BLUOS_PORT
+
         _discovered_devices = [
             DiscoveredDevice(
                 host=manual_address,

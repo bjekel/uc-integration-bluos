@@ -17,6 +17,10 @@ MIN_RECONNECT_DELAY = 1.0
 MAX_RECONNECT_DELAY = 30.0
 BACKOFF_FACTOR = 2.0
 
+# Preset command prefixes
+PRESET_LEGACY_PREFIX = "preset:"
+PRESET_COMMAND_PREFIX = "PRESET_"
+
 
 class Events(StrEnum):
     """Events emitted by BluOSPlayer."""
@@ -454,8 +458,8 @@ class BluOSPlayer:
 
         try:
             # Legacy format: preset:N
-            if source_id.startswith("preset:"):
-                preset_id = source_id[7:]  # Remove 'preset:' prefix
+            if source_id.startswith(PRESET_LEGACY_PREFIX):
+                preset_id = source_id[len(PRESET_LEGACY_PREFIX) :]
                 await self._player.load_preset(int(preset_id))
                 return True
 
@@ -488,12 +492,12 @@ class BluOSPlayer:
         if not self._player or not self._available:
             return False
 
-        if not command.startswith("PRESET_"):
+        if not command.startswith(PRESET_COMMAND_PREFIX):
             _LOG.warning("Invalid preset command: %s", command)
             return False
 
         try:
-            preset_id = int(command[7:])  # Remove "PRESET_" prefix
+            preset_id = int(command[len(PRESET_COMMAND_PREFIX) :])
             await self._player.load_preset(preset_id)
             return True
         except (ValueError, PlayerError) as e:
@@ -516,7 +520,7 @@ class BluOSPlayer:
 
     def get_simple_commands(self) -> list[str]:
         """Get list of simple commands for presets."""
-        commands = [f"PRESET_{preset.id}" for preset in self._presets]
+        commands = [f"{PRESET_COMMAND_PREFIX}{preset.id}" for preset in self._presets]
         commands.append("REFRESH_PRESETS")
         return commands
 

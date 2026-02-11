@@ -219,6 +219,20 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.skip = AsyncMock()
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
@@ -235,6 +249,20 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.back = AsyncMock()
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()

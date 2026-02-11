@@ -122,22 +122,29 @@ class Devices:
             _LOG.error("Failed to save configuration: %s", e)
             return False
 
-    def add_or_update(self, device: BluOSDevice) -> None:
+    def add_or_update(self, device: BluOSDevice, trigger_callbacks: bool = True) -> bool:
         """
         Add or update a device configuration.
 
         Args:
             device: Device configuration to add/update
+            trigger_callbacks: Whether to trigger add/update callbacks
+
+        Returns:
+            True if device was newly added, False if updated
         """
         is_new = device.id not in self._devices
         self._devices[device.id] = device
         self.store()
 
-        if is_new and self._add_handler:
+        if is_new:
             _LOG.info("Device added: %s (%s)", device.name, device.id)
-            self._add_handler(device)
+            if trigger_callbacks and self._add_handler:
+                self._add_handler(device)
         else:
             _LOG.info("Device updated: %s (%s)", device.name, device.id)
+
+        return is_new
 
     def remove(self, device_id: str) -> bool:
         """

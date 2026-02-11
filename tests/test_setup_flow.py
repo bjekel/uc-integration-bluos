@@ -65,7 +65,9 @@ class TestDriverSetupHandler:
         """Test handling initial setup request."""
         msg = DriverSetupRequest(reconfigure=False, setup_data={})
 
-        result = await driver_setup_handler(msg)
+        with patch("setup_flow.discover_bluos_players", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = []
+            result = await driver_setup_handler(msg)
 
         assert isinstance(result, RequestUserInput)
         assert setup_flow._setup_step == SetupSteps.DISCOVER
@@ -158,6 +160,21 @@ class TestDriverSetupHandler:
         assert setup_flow._setup_step == SetupSteps.DEVICE_CHOICE
         assert len(setup_flow._discovered_devices) == 1
         assert setup_flow._discovered_devices[0].host == "192.168.1.200"
+
+    @pytest.mark.asyncio
+    async def test_discovery_manual_invalid_ip(self):
+        """Test manual IP entry with invalid IP address."""
+        setup_flow._setup_step = SetupSteps.DISCOVER
+        msg = UserDataResponse(input_values={"manual_address": "not-an-ip-address"})
+
+        result = await driver_setup_handler(msg)
+
+        # Should return error form, not proceed to device choice
+        assert isinstance(result, RequestUserInput)
+        assert setup_flow._setup_step == SetupSteps.DISCOVER
+        # Check it's an error form with manual_address field
+        setting_ids = [s["id"] for s in result.settings]
+        assert "manual_address" in setting_ids
 
     @pytest.mark.asyncio
     async def test_device_choice(self):

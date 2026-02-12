@@ -13,6 +13,7 @@ from bluos import BluOSPlayer
 from bluos import Events as BluOSEvents
 from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
+from select_entity import BluOSPresetSelect
 from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ api = ucapi.IntegrationAPI(_LOOP)
 # Configured players and entities
 _configured_players: dict[str, BluOSPlayer] = {}
 _entities: dict[str, BluOSMediaPlayer] = {}
+_select_entities: dict[str, BluOSPresetSelect] = {}
 _devices: Devices | None = None
 
 # Remote state
@@ -100,6 +102,17 @@ async def _add_player(device: BluOSDevice) -> None:
 
     _LOG.info("Registered entity: %s", entity.id)
 
+    # Create select entity for presets (options may be empty until player connects)
+    select_entity = BluOSPresetSelect(device, player)
+    _select_entities[device.id] = select_entity
+
+    # Register select entity with API
+    if api.available_entities.contains(select_entity.id):
+        api.available_entities.remove(select_entity.id)
+    api.available_entities.add(select_entity)
+
+    _LOG.info("Registered select entity: %s", select_entity.id)
+
     # Connect if not in standby
     if not _REMOTE_IN_STANDBY:
         await player.connect()
@@ -117,6 +130,13 @@ async def _remove_player(device_id: str) -> None:
             api.available_entities.remove(entity.id)
         if api.configured_entities.contains(entity.id):
             api.configured_entities.remove(entity.id)
+
+    if device_id in _select_entities:
+        select_entity = _select_entities.pop(device_id)
+        if api.available_entities.contains(select_entity.id):
+            api.available_entities.remove(select_entity.id)
+        if api.configured_entities.contains(select_entity.id):
+            api.configured_entities.remove(select_entity.id)
 
 
 def _any_player_connected() -> bool:
@@ -147,6 +167,30 @@ def _on_player_connected(device_id: str) -> None:
         # Trigger initial status poll
         _LOOP.create_task(_poll_player(device_id))
 
+    # Update select entity options now that presets are loaded
+    if device_id in _select_entities:
+        select_entity = _select_entities[device_id]
+        player = _configured_players[device_id]
+        _LOG.debug(
+            "Refreshing select entity options for %s with %d presets: %s",
+            device_id,
+            len(player.presets),
+            [p.name for p in player.presets],
+        )
+        changed = select_entity.refresh_options()
+        if changed:
+            _LOG.info(
+                "Select entity %s options updated: %s",
+                select_entity.id,
+                select_entity.attributes.get("options", []),
+            )
+            # Update configured_entities to notify UC of the change
+            if api.configured_entities.contains(select_entity.id):
+                api.configured_entities.update_attributes(select_entity.id, changed)
+            # Also update available_entities to ensure new subscriptions get correct data
+            if api.available_entities.contains(select_entity.id):
+                api.available_entities.update_attributes(select_entity.id, changed)
+
 
 def _on_player_disconnected(device_id: str) -> None:
     """Handle player disconnected event."""
@@ -159,6 +203,13 @@ def _on_player_disconnected(device_id: str) -> None:
         if changed:
             api.configured_entities.update_attributes(entity.id, changed)
 
+    # Set select entity unavailable
+    if device_id in _select_entities:
+        select_entity = _select_entities[device_id]
+        changed = select_entity.set_unavailable()
+        if changed:
+            api.configured_entities.update_attributes(select_entity.id, changed)
+
 
 def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
     """Handle player update event."""
@@ -167,6 +218,13 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         changed = entity.update_attributes(attributes)
         if changed:
             api.configured_entities.update_attributes(entity.id, changed)
+
+    # Update select entity attributes
+    if device_id in _select_entities:
+        select_entity = _select_entities[device_id]
+        changed = select_entity.update_attributes(attributes)
+        if changed:
+            api.configured_entities.update_attributes(select_entity.id, changed)
 
 
 async def _poll_player(device_id: str) -> None:
@@ -271,6 +329,9 @@ async def _on_exit_standby() -> None:
     # Clear cached attributes so all current values are sent to the remote
     for device_id, entity in _entities.items():
         entity.clear_cached_attributes()
+        # Also clear cached attributes for select entity
+        if device_id in _select_entities:
+            _select_entities[device_id].clear_cached_attributes()
         if device_id in _configured_players:
             player = _configured_players[device_id]
             if player.available:
@@ -284,7 +345,7 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
     _LOG.info("Subscribed to entities: %s", entity_ids)
 
     for entity_id in entity_ids:
-        # Find the device ID from entity ID
+        # Check if it's a media player entity
         for device_id, entity in _entities.items():
             if entity.id == entity_id:
                 if device_id in _configured_players:
@@ -293,6 +354,21 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
                         await player.connect()
                     else:
                         await player.poll_status(use_etag=False)
+                break
+
+        # Check if it's a select entity - send current state immediately
+        for device_id, select_entity in _select_entities.items():
+            if select_entity.id == entity_id:
+                if device_id in _configured_players:
+                    player = _configured_players[device_id]
+                    if player.available and player.presets:
+                        # Player connected with presets - send current options
+                        changed = select_entity.refresh_options()
+                        if changed:
+                            api.configured_entities.update_attributes(select_entity.id, changed)
+                        else:
+                            # Even if no change, send current attributes to ensure UC has them
+                            api.configured_entities.update_attributes(select_entity.id, select_entity.attributes)
                 break
 
 
@@ -336,10 +412,15 @@ async def _entity_command_handler(
     """Handle entity commands."""
     _LOG.debug("Command %s for %s (type: %s)", cmd_id, entity_id, entity_type)
 
-    # Find the entity
-    for device_id, entity in _entities.items():
+    # Find the media player entity
+    for entity in _entities.values():
         if entity.id == entity_id:
             return await entity.command(cmd_id, params)
+
+    # Find the select entity
+    for select_entity in _select_entities.values():
+        if select_entity.id == entity_id:
+            return await select_entity.command(cmd_id, params)
 
     _LOG.warning("Entity not found: %s", entity_id)
     return ucapi.StatusCodes.NOT_FOUND

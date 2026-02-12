@@ -130,6 +130,22 @@ class TestBluOSMediaPlayer:
         assert Attributes.MEDIA_TITLE in changed
         assert changed[Attributes.MEDIA_TITLE] == "Test Song"
 
+    def test_update_attributes_shuffle_state(self, entity, mock_player):
+        """Test shuffle state is updated from attributes."""
+        # Initially shuffle should be False (default)
+        attributes = {"state": BluOSStates.PLAYING, "shuffle": True}
+        changed = entity.update_attributes(attributes)
+
+        assert Attributes.SHUFFLE in changed
+        assert changed[Attributes.SHUFFLE] is True
+
+        # Update to False
+        attributes = {"state": BluOSStates.PLAYING, "shuffle": False}
+        changed = entity.update_attributes(attributes)
+
+        assert Attributes.SHUFFLE in changed
+        assert changed[Attributes.SHUFFLE] is False
+
     def test_update_attributes_no_change(self, entity, mock_player):
         """Test updating attributes with same values returns empty."""
         attributes = {

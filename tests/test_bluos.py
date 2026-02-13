@@ -328,14 +328,143 @@ class TestBluOSPlayer:
         mock_pyblu_player.sync_status = AsyncMock()
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
-        mock_pyblu_player.shuffle = AsyncMock()
+        mock_pyblu_player.base_url = "http://192.168.1.100:11000"
+
+        # Mock the HTTP session for direct API call (async context manager)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.text = AsyncMock(return_value="<playlist shuffle='1'/>")
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        mock_pyblu_player._session = MagicMock()
+        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.set_shuffle(True)
 
             assert result is True
-            mock_pyblu_player.shuffle.assert_called_once_with(True)
+            mock_pyblu_player._session.get.assert_called_once()
+            call_args = mock_pyblu_player._session.get.call_args
+            assert "/Shuffle" in call_args[0][0]
+            assert call_args[1]["params"] == {"state": "1"}
+
+    @pytest.mark.asyncio
+    async def test_set_repeat(self, player):
+        """Test set repeat mode command."""
+        from bluos import RepeatMode
+
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.base_url = "http://192.168.1.100:11000"
+
+        # Mock the HTTP session for direct API call
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        mock_pyblu_player._session = MagicMock()
+        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.set_repeat(RepeatMode.ALL)
+
+            assert result is True
+            assert player.repeat_mode == RepeatMode.ALL
+            call_args = mock_pyblu_player._session.get.call_args
+            assert "/Repeat" in call_args[0][0]
+            assert call_args[1]["params"] == {"state": "0"}  # ALL = 0
+
+    @pytest.mark.asyncio
+    async def test_toggle_repeat(self, player):
+        """Test toggle repeat cycles through modes."""
+        from bluos import RepeatMode
+
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.base_url = "http://192.168.1.100:11000"
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        mock_pyblu_player._session = MagicMock()
+        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+
+            # OFF -> ALL
+            assert player.repeat_mode == RepeatMode.OFF
+            await player.toggle_repeat()
+            assert player.repeat_mode == RepeatMode.ALL
+
+            # ALL -> ONE
+            await player.toggle_repeat()
+            assert player.repeat_mode == RepeatMode.ONE
+
+            # ONE -> OFF
+            await player.toggle_repeat()
+            assert player.repeat_mode == RepeatMode.OFF
+
+    @pytest.mark.asyncio
+    async def test_seek(self, player):
+        """Test seek command."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.base_url = "http://192.168.1.100:11000"
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        mock_pyblu_player._session = MagicMock()
+        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.seek(120)
+
+            assert result is True
+            call_args = mock_pyblu_player._session.get.call_args
+            assert "/Play" in call_args[0][0]
+            assert call_args[1]["params"] == {"seek": "120"}
+
+    @pytest.mark.asyncio
+    async def test_toggle_sleep_timer(self, player):
+        """Test sleep timer toggle."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.sleep_timer = AsyncMock(return_value=15)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.toggle_sleep_timer()
+
+            assert result == 15
+            assert player.sleep_timer == 15
+            mock_pyblu_player.sleep_timer.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_command_when_unavailable(self, player):

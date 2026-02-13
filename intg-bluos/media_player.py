@@ -5,9 +5,10 @@ from typing import Any
 
 import ucapi
 from bluos import BluOSPlayer
+from bluos import RepeatMode as BluOSRepeatMode
 from bluos import States as BluOSStates
 from config import BluOSDevice
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, States
+from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, RepeatMode, States
 
 _LOG = logging.getLogger(__name__)
 
@@ -24,7 +25,11 @@ BLUOS_FEATURES = [
     Features.STOP,
     Features.NEXT,
     Features.PREVIOUS,
+    Features.FAST_FORWARD,
+    Features.REWIND,
     Features.SHUFFLE,
+    Features.REPEAT,
+    Features.SEEK,
     Features.SELECT_SOURCE,
     Features.MEDIA_TITLE,
     Features.MEDIA_ARTIST,
@@ -33,6 +38,9 @@ BLUOS_FEATURES = [
     Features.MEDIA_DURATION,
     Features.MEDIA_POSITION,
 ]
+
+# Seek step for fast forward/rewind in seconds
+SEEK_STEP = 10
 
 
 class BluOSMediaPlayer(ucapi.MediaPlayer):
@@ -71,6 +79,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 Attributes.MEDIA_DURATION: 0,
                 Attributes.MEDIA_POSITION: 0,
                 Attributes.SHUFFLE: False,
+                Attributes.REPEAT: RepeatMode.OFF,
                 Attributes.SOURCE: "",
                 Attributes.SOURCE_LIST: [],
             },
@@ -127,9 +136,18 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
         for bluos_attr, uc_attr in attr_mapping.items():
             value = attributes.get(bluos_attr)
-            if value is not None and value != self._last_attributes.get(uc_attr):
+            last_value = self._last_attributes.get(uc_attr)
+            if value is not None and value != last_value:
                 changed[uc_attr] = value
                 self._last_attributes[uc_attr] = value
+
+        # Handle repeat mode separately (needs mapping from BluOS to UC)
+        repeat = attributes.get("repeat")
+        if repeat is not None:
+            uc_repeat = self._map_repeat_mode(repeat)
+            if uc_repeat != self._last_attributes.get(Attributes.REPEAT):
+                changed[Attributes.REPEAT] = uc_repeat
+                self._last_attributes[Attributes.REPEAT] = uc_repeat
 
         # Clear media info when not playing
         if state in (States.OFF, States.STANDBY, States.UNAVAILABLE):
@@ -176,7 +194,19 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         }
         return state_map.get(bluos_state, States.UNKNOWN)
 
-    async def command(self, cmd_id: str, params: dict[str, Any] | None = None) -> ucapi.StatusCodes:
+    @staticmethod
+    def _map_repeat_mode(bluos_repeat: BluOSRepeatMode) -> RepeatMode:
+        """Map BluOS repeat mode to UC repeat mode."""
+        repeat_map = {
+            BluOSRepeatMode.OFF: RepeatMode.OFF,
+            BluOSRepeatMode.ALL: RepeatMode.ALL,
+            BluOSRepeatMode.ONE: RepeatMode.ONE,
+        }
+        return repeat_map.get(bluos_repeat, RepeatMode.OFF)
+
+    async def command(
+        self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any = None
+    ) -> ucapi.StatusCodes:
         """
         Handle media player commands.
 
@@ -208,6 +238,23 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 self._last_attributes.pop(Attributes.SOURCE_LIST, None)
                 return ucapi.StatusCodes.OK
             return ucapi.StatusCodes.SERVER_ERROR
+
+        # Handle shuffle toggle command
+        if cmd_id == "SHUFFLE_TOGGLE":
+            current = self._last_attributes.get(Attributes.SHUFFLE, False)
+            result = await self._player.set_shuffle(not current)
+            return ucapi.StatusCodes.OK if result else ucapi.StatusCodes.SERVER_ERROR
+
+        # Handle repeat toggle command (cycles: OFF -> ALL -> ONE -> OFF)
+        if cmd_id == "REPEAT_TOGGLE":
+            result = await self._player.toggle_repeat()
+            return ucapi.StatusCodes.OK if result else ucapi.StatusCodes.SERVER_ERROR
+
+        # Handle sleep timer command (cycles: 15 -> 30 -> 45 -> 60 -> 90 -> off)
+        if cmd_id == "SLEEP_TIMER":
+            new_timer = await self._player.toggle_sleep_timer()
+            _LOG.info("Sleep timer set to %d minutes", new_timer)
+            return ucapi.StatusCodes.OK
 
         result = False
 
@@ -241,6 +288,19 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             case Commands.PREVIOUS:
                 result = await self._player.previous_track()
 
+            case Commands.FAST_FORWARD:
+                # Seek forward by SEEK_STEP seconds
+                current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
+                duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
+                new_pos = min(current_pos + SEEK_STEP, duration) if duration else current_pos + SEEK_STEP
+                result = await self._player.seek(int(new_pos))
+
+            case Commands.REWIND:
+                # Seek backward by SEEK_STEP seconds
+                current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
+                new_pos = max(current_pos - SEEK_STEP, 0)
+                result = await self._player.seek(int(new_pos))
+
             case Commands.VOLUME:
                 volume = params.get("volume")
                 if volume is not None:
@@ -264,8 +324,32 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 result = await self._player.mute(False)
 
             case Commands.SHUFFLE:
+                # Set shuffle mode from parameter
                 shuffle = params.get("shuffle", False)
-                result = await self._player.set_shuffle(shuffle)
+                result = await self._player.set_shuffle(bool(shuffle))
+
+            case Commands.REPEAT:
+                # Set repeat mode from parameter
+                repeat_param = params.get("repeat", "OFF")
+                # Map UC RepeatMode to BluOS RepeatMode
+                mode_map = {
+                    RepeatMode.OFF: BluOSRepeatMode.OFF,
+                    RepeatMode.ALL: BluOSRepeatMode.ALL,
+                    RepeatMode.ONE: BluOSRepeatMode.ONE,
+                    # Also accept string values
+                    "OFF": BluOSRepeatMode.OFF,
+                    "ALL": BluOSRepeatMode.ALL,
+                    "ONE": BluOSRepeatMode.ONE,
+                }
+                bluos_mode = mode_map.get(repeat_param, BluOSRepeatMode.OFF)
+                result = await self._player.set_repeat(bluos_mode)
+
+            case Commands.SEEK:
+                position = params.get("media_position")
+                if position is not None:
+                    result = await self._player.seek(int(position))
+                else:
+                    result = False
 
             case Commands.SELECT_SOURCE:
                 source = params.get("source")

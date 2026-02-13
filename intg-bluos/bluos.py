@@ -5,6 +5,7 @@ import logging
 from enum import StrEnum
 from typing import Any, Optional
 
+import aiohttp
 from config import BluOSDevice
 from pyblu import Input, Player, Preset, Status, SyncStatus
 from pyblu.errors import PlayerError, PlayerUnreachableError
@@ -45,6 +46,14 @@ class States(StrEnum):
     BUFFERING = "BUFFERING"
 
 
+class RepeatMode(StrEnum):
+    """Repeat modes for BluOS playback."""
+
+    OFF = "OFF"
+    ALL = "ALL"
+    ONE = "ONE"
+
+
 class BluOSPlayer:
     """Wrapper for pyblu Player with event emission and connection management."""
 
@@ -68,6 +77,8 @@ class BluOSPlayer:
         self._last_etag: Optional[str] = None
         self._inputs: list[Input] = []
         self._presets: list[Preset] = []
+        self._repeat_mode = RepeatMode.OFF
+        self._sleep_timer = 0
 
     @property
     def id(self) -> str:
@@ -108,6 +119,16 @@ class BluOSPlayer:
     def presets(self) -> list[Preset]:
         """Available presets."""
         return self._presets
+
+    @property
+    def repeat_mode(self) -> RepeatMode:
+        """Current repeat mode."""
+        return self._repeat_mode
+
+    @property
+    def sleep_timer(self) -> int:
+        """Current sleep timer in minutes (0 = off)."""
+        return self._sleep_timer
 
     async def connect(self) -> bool:
         """
@@ -272,6 +293,8 @@ class BluOSPlayer:
     def _status_to_attributes(self, status: Status) -> dict[str, Any]:
         """Convert pyblu Status to UC attributes."""
         image_url = self._get_absolute_image_url(status.image)
+        # Update sleep timer from status
+        self._sleep_timer = status.sleep or 0
         return {
             "state": self._map_state(status.state),
             "volume": status.volume,
@@ -283,6 +306,7 @@ class BluOSPlayer:
             "media_duration": status.total_seconds or 0,
             "media_position": status.seconds or 0,
             "shuffle": status.shuffle or False,
+            "repeat": self._repeat_mode,
             "source": status.input_id or "",
         }
 
@@ -438,11 +462,19 @@ class BluOSPlayer:
             enabled: True to enable shuffle
         """
         if not self._player or not self._available:
+            _LOG.warning("set_shuffle called but player not available")
             return False
         try:
-            await self._player.shuffle(enabled)
+            # Work around pyblu bug: it sends 'shuffle' param but BluOS API expects 'state'
+            # See: https://github.com/superfell/BluShepherd/blob/master/api.md
+            params = {"state": "1" if enabled else "0"}
+            url = f"{self._player.base_url}/Shuffle"
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                response.raise_for_status()
             return True
-        except PlayerError as e:
+        except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Set shuffle failed: %s", e)
             return False
 
@@ -519,9 +551,12 @@ class BluOSPlayer:
         return sources
 
     def get_simple_commands(self) -> list[str]:
-        """Get list of simple commands for presets."""
+        """Get list of simple commands for presets and utilities."""
         commands = [f"{PRESET_COMMAND_PREFIX}{preset.id}" for preset in self._presets]
         commands.append("REFRESH_PRESETS")
+        commands.append("SHUFFLE_TOGGLE")
+        commands.append("REPEAT_TOGGLE")
+        commands.append("SLEEP_TIMER")
         return commands
 
     async def refresh_presets(self) -> bool:
@@ -582,3 +617,84 @@ class BluOSPlayer:
         except PlayerError as e:
             _LOG.error("Remove follower failed: %s", e)
             return False
+
+    async def set_repeat(self, mode: RepeatMode) -> bool:
+        """
+        Set repeat mode.
+
+        Args:
+            mode: Repeat mode (OFF, ALL, ONE)
+        """
+        if not self._player or not self._available:
+            return False
+        try:
+            # BluOS API: state=0 (repeat all), state=1 (repeat one), state=2 (off)
+            state_map = {
+                RepeatMode.ALL: "0",
+                RepeatMode.ONE: "1",
+                RepeatMode.OFF: "2",
+            }
+            params = {"state": state_map[mode]}
+            url = f"{self._player.base_url}/Repeat"
+            _LOG.debug("Setting repeat mode to %s: %s", mode, url)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                response.raise_for_status()
+                self._repeat_mode = mode
+                _LOG.debug("Repeat mode set to %s", mode)
+            return True
+        except (PlayerError, aiohttp.ClientError) as e:
+            _LOG.error("Set repeat failed: %s", e)
+            return False
+
+    async def toggle_repeat(self) -> bool:
+        """Toggle repeat mode: OFF -> ALL -> ONE -> OFF."""
+        next_mode = {
+            RepeatMode.OFF: RepeatMode.ALL,
+            RepeatMode.ALL: RepeatMode.ONE,
+            RepeatMode.ONE: RepeatMode.OFF,
+        }
+        return await self.set_repeat(next_mode[self._repeat_mode])
+
+    async def seek(self, position: int) -> bool:
+        """
+        Seek to a position in the current track.
+
+        Args:
+            position: Position in seconds
+        """
+        if not self._player or not self._available:
+            return False
+        try:
+            params = {"seek": str(position)}
+            url = f"{self._player.base_url}/Play"
+            _LOG.debug("Seeking to position %d: %s", position, url)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                response.raise_for_status()
+                _LOG.debug("Seek to %d succeeded", position)
+            return True
+        except (PlayerError, aiohttp.ClientError) as e:
+            _LOG.error("Seek failed: %s", e)
+            return False
+
+    async def toggle_sleep_timer(self) -> int:
+        """
+        Toggle sleep timer through preset values.
+
+        Returns:
+            New sleep timer value in minutes (0 = off)
+        """
+        if not self._player or not self._available:
+            return 0
+        try:
+            # Use pyblu's sleep_timer which cycles: 15 -> 30 -> 45 -> 60 -> 90 -> 0
+            new_value = await self._player.sleep_timer()
+            self._sleep_timer = new_value
+            _LOG.debug("Sleep timer set to %d minutes", new_value)
+            return new_value
+        except PlayerError as e:
+            _LOG.error("Toggle sleep timer failed: %s", e)
+            return self._sleep_timer

@@ -26,7 +26,11 @@ class TestBluOSFeatures:
         assert Features.STOP in BLUOS_FEATURES
         assert Features.NEXT in BLUOS_FEATURES
         assert Features.PREVIOUS in BLUOS_FEATURES
+        assert Features.FAST_FORWARD in BLUOS_FEATURES
+        assert Features.REWIND in BLUOS_FEATURES
         assert Features.SHUFFLE in BLUOS_FEATURES
+        assert Features.REPEAT in BLUOS_FEATURES
+        assert Features.SEEK in BLUOS_FEATURES
         assert Features.SELECT_SOURCE in BLUOS_FEATURES
         assert Features.MEDIA_TITLE in BLUOS_FEATURES
         assert Features.MEDIA_ARTIST in BLUOS_FEATURES
@@ -304,14 +308,131 @@ class TestBluOSMediaPlayer:
         mock_player.mute.assert_called_once_with(False)
 
     @pytest.mark.asyncio
-    async def test_command_shuffle(self, entity, mock_player):
-        """Test shuffle command."""
+    async def test_command_shuffle_set_mode(self, entity, mock_player):
+        """Test shuffle command sets specific mode from param."""
         mock_player.set_shuffle = AsyncMock(return_value=True)
 
+        # Set shuffle to True
         result = await entity.command(Commands.SHUFFLE, {"shuffle": True})
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_shuffle.assert_called_once_with(True)
+
+        # Set shuffle to False
+        mock_player.set_shuffle.reset_mock()
+        result = await entity.command(Commands.SHUFFLE, {"shuffle": False})
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_shuffle.assert_called_once_with(False)
+
+    @pytest.mark.asyncio
+    async def test_command_shuffle_toggle(self, entity, mock_player):
+        """Test SHUFFLE_TOGGLE simple command toggles shuffle state."""
+        mock_player.set_shuffle = AsyncMock(return_value=True)
+
+        # Initially shuffle is False, toggling should enable it
+        result = await entity.command("SHUFFLE_TOGGLE", {})
 
         assert result == ucapi.StatusCodes.OK
         mock_player.set_shuffle.assert_called_once_with(True)
+
+        # Now update the entity state to show shuffle is enabled
+        mock_player.set_shuffle.reset_mock()
+        entity.update_attributes({"state": "playing", "shuffle": True})
+
+        # Toggling again should disable it
+        result = await entity.command("SHUFFLE_TOGGLE", {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_shuffle.assert_called_once_with(False)
+
+    @pytest.mark.asyncio
+    async def test_command_repeat_set_mode(self, entity, mock_player):
+        """Test repeat command sets specific mode from param."""
+        from bluos import RepeatMode as BluOSRepeatMode
+
+        mock_player.set_repeat = AsyncMock(return_value=True)
+
+        # Set repeat to ALL
+        result = await entity.command(Commands.REPEAT, {"repeat": "ALL"})
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_repeat.assert_called_once_with(BluOSRepeatMode.ALL)
+
+        # Set repeat to ONE
+        mock_player.set_repeat.reset_mock()
+        result = await entity.command(Commands.REPEAT, {"repeat": "ONE"})
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_repeat.assert_called_once_with(BluOSRepeatMode.ONE)
+
+        # Set repeat to OFF
+        mock_player.set_repeat.reset_mock()
+        result = await entity.command(Commands.REPEAT, {"repeat": "OFF"})
+        assert result == ucapi.StatusCodes.OK
+        mock_player.set_repeat.assert_called_once_with(BluOSRepeatMode.OFF)
+
+    @pytest.mark.asyncio
+    async def test_command_repeat_toggle(self, entity, mock_player):
+        """Test REPEAT_TOGGLE simple command cycles through modes."""
+        mock_player.toggle_repeat = AsyncMock(return_value=True)
+
+        result = await entity.command("REPEAT_TOGGLE", {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.toggle_repeat.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_command_seek(self, entity, mock_player):
+        """Test seek command."""
+        mock_player.seek = AsyncMock(return_value=True)
+
+        result = await entity.command(Commands.SEEK, {"media_position": 120})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.seek.assert_called_once_with(120)
+
+    @pytest.mark.asyncio
+    async def test_command_fast_forward(self, entity, mock_player):
+        """Test fast forward seeks forward by 10 seconds."""
+        mock_player.seek = AsyncMock(return_value=True)
+        # Set current position to 30 seconds
+        entity.update_attributes({"state": "playing", "media_position": 30, "media_duration": 180})
+
+        result = await entity.command(Commands.FAST_FORWARD, {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.seek.assert_called_once_with(40)  # 30 + 10
+
+    @pytest.mark.asyncio
+    async def test_command_rewind(self, entity, mock_player):
+        """Test rewind seeks backward by 10 seconds."""
+        mock_player.seek = AsyncMock(return_value=True)
+        # Set current position to 30 seconds
+        entity.update_attributes({"state": "playing", "media_position": 30, "media_duration": 180})
+
+        result = await entity.command(Commands.REWIND, {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.seek.assert_called_once_with(20)  # 30 - 10
+
+    @pytest.mark.asyncio
+    async def test_command_rewind_at_start(self, entity, mock_player):
+        """Test rewind at start doesn't go negative."""
+        mock_player.seek = AsyncMock(return_value=True)
+        # Set current position to 5 seconds (less than seek step)
+        entity.update_attributes({"state": "playing", "media_position": 5, "media_duration": 180})
+
+        result = await entity.command(Commands.REWIND, {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.seek.assert_called_once_with(0)  # Can't go below 0
+
+    @pytest.mark.asyncio
+    async def test_command_sleep_timer(self, entity, mock_player):
+        """Test sleep timer command."""
+        mock_player.toggle_sleep_timer = AsyncMock(return_value=15)
+
+        result = await entity.command("SLEEP_TIMER", {})
+
+        assert result == ucapi.StatusCodes.OK
+        mock_player.toggle_sleep_timer.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_command_select_source(self, entity, mock_player):

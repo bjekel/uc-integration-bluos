@@ -79,6 +79,7 @@ class BluOSPlayer:
         self._presets: list[Preset] = []
         self._repeat_mode = RepeatMode.OFF
         self._sleep_timer = 0
+        self._current_preset_name: str | None = None
 
     @property
     def id(self) -> str:
@@ -129,6 +130,11 @@ class BluOSPlayer:
     def sleep_timer(self) -> int:
         """Current sleep timer in minutes (0 = off)."""
         return self._sleep_timer
+
+    @property
+    def current_preset_name(self) -> str | None:
+        """Name of currently selected preset, or None if not playing a preset."""
+        return self._current_preset_name
 
     async def connect(self) -> bool:
         """
@@ -308,6 +314,7 @@ class BluOSPlayer:
             "shuffle": status.shuffle or False,
             "repeat": self._repeat_mode,
             "source": status.input_id or "",
+            "current_preset": self._current_preset_name,
         }
 
     @staticmethod
@@ -491,20 +498,28 @@ class BluOSPlayer:
         try:
             # Legacy format: preset:N
             if source_id.startswith(PRESET_LEGACY_PREFIX):
-                preset_id = source_id[len(PRESET_LEGACY_PREFIX) :]
-                await self._player.load_preset(int(preset_id))
+                preset_id_str = source_id[len(PRESET_LEGACY_PREFIX) :]
+                preset_id = int(preset_id_str)
+                await self._player.load_preset(preset_id)
+                # Find preset name for tracking
+                for preset in self._presets:
+                    if preset.id == preset_id:
+                        self._current_preset_name = preset.name
+                        break
                 return True
 
             # Check if it's a preset name
             for preset in self._presets:
                 if preset.name == source_id:
                     await self._player.load_preset(preset.id)
+                    self._current_preset_name = preset.name
                     return True
 
-            # Find input by ID or name
+            # Find input by ID or name (not a preset)
             for inp in self._inputs:
                 if inp.id == source_id or inp.text == source_id:
                     await self._player.play_url(inp.url)
+                    self._current_preset_name = None
                     return True
 
             _LOG.warning("Source not found: %s", source_id)
@@ -531,6 +546,11 @@ class BluOSPlayer:
         try:
             preset_id = int(command[len(PRESET_COMMAND_PREFIX) :])
             await self._player.load_preset(preset_id)
+            # Track preset name for select entity
+            for preset in self._presets:
+                if preset.id == preset_id:
+                    self._current_preset_name = preset.name
+                    break
             return True
         except (ValueError, PlayerError) as e:
             _LOG.error("Load preset by command failed: %s", e)

@@ -64,7 +64,7 @@ class BluOSDiscovery:
                 self._browser.cancel()
                 self._browser = None
 
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             _LOG.error("Discovery error: %s", e)
         finally:
             if self._azc:
@@ -96,7 +96,7 @@ class BluOSDiscovery:
             info = AsyncServiceInfo(service_type, name)
             if await info.async_request(zeroconf, 3000):
                 await self._process_service_info(name, info)
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             _LOG.warning("Failed to resolve service %s: %s", name, e)
 
     async def _process_service_info(self, name: str, info: AsyncServiceInfo) -> None:

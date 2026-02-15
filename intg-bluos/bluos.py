@@ -340,6 +340,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.play()
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Play failed: %s", e)
@@ -351,6 +352,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.pause()
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Pause failed: %s", e)
@@ -362,6 +364,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.stop()
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Stop failed: %s", e)
@@ -480,6 +483,7 @@ class BluOSPlayer:
                 url, params=params, timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 response.raise_for_status()
+            await self.poll_status(use_etag=False)
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Set shuffle failed: %s", e)
@@ -506,6 +510,7 @@ class BluOSPlayer:
                     if preset.id == preset_id:
                         self._current_preset_name = preset.name
                         break
+                await self.poll_status(use_etag=False)
                 return True
 
             # Check if it's a preset name
@@ -513,6 +518,7 @@ class BluOSPlayer:
                 if preset.name == source_id:
                     await self._player.load_preset(preset.id)
                     self._current_preset_name = preset.name
+                    await self.poll_status(use_etag=False)
                     return True
 
             # Find input by ID or name (not a preset)
@@ -520,6 +526,7 @@ class BluOSPlayer:
                 if inp.id == source_id or inp.text == source_id:
                     await self._player.play_url(inp.url)
                     self._current_preset_name = None
+                    await self.poll_status(use_etag=False)
                     return True
 
             _LOG.warning("Source not found: %s", source_id)
@@ -551,6 +558,7 @@ class BluOSPlayer:
                 if preset.id == preset_id:
                     self._current_preset_name = preset.name
                     break
+            await self.poll_status(use_etag=False)
             return True
         except (ValueError, PlayerError) as e:
             _LOG.error("Load preset by command failed: %s", e)
@@ -663,6 +671,7 @@ class BluOSPlayer:
                 response.raise_for_status()
                 self._repeat_mode = mode
                 _LOG.debug("Repeat mode set to %s", mode)
+            await self.poll_status(use_etag=False)
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Set repeat failed: %s", e)
@@ -695,6 +704,7 @@ class BluOSPlayer:
             ) as response:
                 response.raise_for_status()
                 _LOG.debug("Seek to %d succeeded", position)
+            await self.poll_status(use_etag=False)
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Seek failed: %s", e)
@@ -714,6 +724,7 @@ class BluOSPlayer:
             new_value = await self._player.sleep_timer()
             self._sleep_timer = new_value
             _LOG.debug("Sleep timer set to %d minutes", new_value)
+            await self.poll_status(use_etag=False)
             return new_value
         except PlayerError as e:
             _LOG.error("Toggle sleep timer failed: %s", e)

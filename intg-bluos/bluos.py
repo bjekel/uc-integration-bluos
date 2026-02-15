@@ -136,6 +136,10 @@ class BluOSPlayer:
         """Name of currently selected preset, or None if not playing a preset."""
         return self._current_preset_name
 
+    def _is_available(self) -> bool:
+        """Check if player is connected and available for commands."""
+        return self._player is not None and self._available
+
     async def connect(self) -> bool:
         """
         Connect to the BluOS player.
@@ -256,7 +260,7 @@ class BluOSPlayer:
         Returns:
             Dictionary of current attributes or None if unavailable
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return None
 
         try:
@@ -336,7 +340,7 @@ class BluOSPlayer:
 
     async def play(self) -> bool:
         """Start playback."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.play()
@@ -348,7 +352,7 @@ class BluOSPlayer:
 
     async def pause(self) -> bool:
         """Pause playback."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.pause()
@@ -360,7 +364,7 @@ class BluOSPlayer:
 
     async def stop(self) -> bool:
         """Stop playback."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.stop()
@@ -372,7 +376,7 @@ class BluOSPlayer:
 
     async def next_track(self) -> bool:
         """Skip to next track."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.skip()
@@ -384,7 +388,7 @@ class BluOSPlayer:
 
     async def previous_track(self) -> bool:
         """Go to previous track."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.back()
@@ -401,10 +405,11 @@ class BluOSPlayer:
         Args:
             level: Volume level 0-100
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.volume(level=max(0, min(100, level)))
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Set volume failed: %s", e)
@@ -412,12 +417,13 @@ class BluOSPlayer:
 
     async def volume_up(self) -> bool:
         """Increase volume by configured step."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             status = await self._player.status()
             new_level = min(100, (status.volume or 0) + self._device.volume_step)
             await self._player.volume(level=new_level)
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Volume up failed: %s", e)
@@ -425,12 +431,13 @@ class BluOSPlayer:
 
     async def volume_down(self) -> bool:
         """Decrease volume by configured step."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             status = await self._player.status()
             new_level = max(0, (status.volume or 0) - self._device.volume_step)
             await self._player.volume(level=new_level)
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Volume down failed: %s", e)
@@ -443,10 +450,11 @@ class BluOSPlayer:
         Args:
             muted: True to mute, False to unmute
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.volume(mute=muted)
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Mute failed: %s", e)
@@ -454,11 +462,12 @@ class BluOSPlayer:
 
     async def toggle_mute(self) -> bool:
         """Toggle mute state."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             status = await self._player.status()
             await self._player.volume(mute=not status.mute)
+            await self.poll_status(use_etag=False)
             return True
         except PlayerError as e:
             _LOG.error("Toggle mute failed: %s", e)
@@ -471,7 +480,7 @@ class BluOSPlayer:
         Args:
             enabled: True to enable shuffle
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             _LOG.warning("set_shuffle called but player not available")
             return False
         try:
@@ -496,7 +505,7 @@ class BluOSPlayer:
         Args:
             source_id: Source identifier (input ID, preset name, or legacy 'preset:N')
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
 
         try:
@@ -543,7 +552,7 @@ class BluOSPlayer:
         Args:
             command: Simple command ID (e.g., "PRESET_1")
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
 
         if not command.startswith(PRESET_COMMAND_PREFIX):
@@ -589,7 +598,7 @@ class BluOSPlayer:
 
     async def refresh_presets(self) -> bool:
         """Refresh the list of available presets from the device."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
 
         try:
@@ -604,7 +613,7 @@ class BluOSPlayer:
 
     async def get_sync_status(self) -> Optional[SyncStatus]:
         """Get multi-room synchronization status."""
-        if not self._player or not self._available:
+        if not self._is_available():
             return None
         try:
             return await self._player.sync_status()
@@ -620,7 +629,7 @@ class BluOSPlayer:
             ip: IP address of the player to add
             port: Port of the player
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.add_follower(ip, port)
@@ -637,7 +646,7 @@ class BluOSPlayer:
             ip: IP address of the player to remove
             port: Port of the player
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             await self._player.remove_follower(ip, port)
@@ -653,7 +662,7 @@ class BluOSPlayer:
         Args:
             mode: Repeat mode (OFF, ALL, ONE)
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             # BluOS API: state=0 (repeat all), state=1 (repeat one), state=2 (off)
@@ -693,7 +702,7 @@ class BluOSPlayer:
         Args:
             position: Position in seconds
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return False
         try:
             params = {"seek": str(position)}
@@ -717,7 +726,7 @@ class BluOSPlayer:
         Returns:
             New sleep timer value in minutes (0 = off)
         """
-        if not self._player or not self._available:
+        if not self._is_available():
             return 0
         try:
             # Use pyblu's sleep_timer which cycles: 15 -> 30 -> 45 -> 60 -> 90 -> 0

@@ -7,12 +7,14 @@ import os
 import sys
 from typing import Any
 
+import aiohttp
 import setup_flow
 import ucapi
 from bluos import BluOSPlayer
 from bluos import Events as BluOSEvents
 from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
+from pyblu.errors import PlayerError, PlayerUnreachableError
 from select_entity import BluOSPresetSelect
 from ucapi import EntityTypes
 
@@ -236,6 +238,37 @@ async def _poll_player(device_id: str) -> None:
     await player.poll_status(use_etag=False)  # Initial poll without etag
 
 
+async def _poll_single_player(device_id: str, player: BluOSPlayer) -> bool:
+    """Poll a single player's status. Returns True if polling succeeded."""
+    try:
+        await player.poll_status(use_etag=True)
+        return True
+    except PlayerUnreachableError as e:
+        _LOG.warning("Player %s unreachable: %s", device_id, e)
+        return False
+    except PlayerError as e:
+        _LOG.error("Player error polling %s: %s", device_id, e)
+        return False
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        _LOG.warning("Network error polling %s: %s", device_id, e)
+        return False
+
+
+async def _reconnect_player(device_id: str, player: BluOSPlayer) -> None:
+    """Attempt to reconnect an unavailable player."""
+    _LOG.debug("Player %s unavailable, attempting reconnect", device_id)
+    try:
+        connected = await player.connect()
+        if connected:
+            _LOG.info("Reconnected to player %s via poller", device_id)
+    except PlayerUnreachableError as e:
+        _LOG.debug("Player %s still unreachable: %s", device_id, e)
+    except PlayerError as e:
+        _LOG.debug("Reconnect attempt failed for %s: %s", device_id, e)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        _LOG.debug("Network error reconnecting %s: %s", device_id, e)
+
+
 async def _status_poller() -> None:
     """Background task to poll player status using long-polling."""
     while True:
@@ -247,23 +280,29 @@ async def _status_poller() -> None:
             await asyncio.sleep(NO_PLAYERS_POLL_INTERVAL)
             continue
 
+        # Separate available and unavailable players
+        available_players = [
+            (device_id, player) for device_id, player in list(_configured_players.items()) if player.available
+        ]
+        unavailable_players = [
+            (device_id, player) for device_id, player in list(_configured_players.items()) if not player.available
+        ]
+
+        # Poll all available players in parallel
         polled_any = False
-        for device_id, player in list(_configured_players.items()):
-            if player.available:
-                try:
-                    await player.poll_status(use_etag=True)
-                    polled_any = True
-                except Exception as e:
-                    _LOG.error("Error polling %s: %s", device_id, e)
-            else:
-                # Try to reconnect unavailable players
-                _LOG.debug("Player %s unavailable, attempting reconnect", device_id)
-                try:
-                    connected = await player.connect()
-                    if connected:
-                        _LOG.info("Reconnected to player %s via poller", device_id)
-                except Exception as e:
-                    _LOG.debug("Reconnect attempt failed for %s: %s", device_id, e)
+        if available_players:
+            results = await asyncio.gather(
+                *[_poll_single_player(device_id, player) for device_id, player in available_players],
+                return_exceptions=True,
+            )
+            polled_any = any(r is True for r in results)
+
+        # Attempt to reconnect unavailable players in parallel
+        if unavailable_players:
+            await asyncio.gather(
+                *[_reconnect_player(device_id, player) for device_id, player in unavailable_players],
+                return_exceptions=True,
+            )
 
         # Small delay if no players were polled to prevent tight loop during reconnection
         if not polled_any:

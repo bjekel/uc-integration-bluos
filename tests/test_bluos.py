@@ -339,6 +339,23 @@ class TestBluOSPlayer:
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.volume = AsyncMock()
 
+        # Mock status for poll_status call
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
+
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.set_volume(50)
@@ -354,6 +371,23 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.volume = AsyncMock()
+
+        # Mock status for poll_status call
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
@@ -372,6 +406,23 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.volume = AsyncMock()
+
+        # Mock status for poll_status call
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = True
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
@@ -838,3 +889,197 @@ class TestBluOSPlayer:
             mock_pyblu_player.status.assert_called_once()
             call_kwargs = mock_pyblu_player.status.call_args[1]
             assert call_kwargs.get("etag") is None
+
+    @pytest.mark.asyncio
+    async def test_volume_up(self, player):
+        """Test volume up command."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.volume = AsyncMock()
+
+        # Mock status for getting current volume and poll_status
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.volume_up()
+
+            assert result is True
+            # Volume step is 5 by default, so 50 + 5 = 55
+            mock_pyblu_player.volume.assert_called_with(level=55)
+
+    @pytest.mark.asyncio
+    async def test_volume_down(self, player):
+        """Test volume down command."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.volume = AsyncMock()
+
+        # Mock status for getting current volume and poll_status
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = 50
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.volume_down()
+
+            assert result is True
+            # Volume step is 5 by default, so 50 - 5 = 45
+            mock_pyblu_player.volume.assert_called_with(level=45)
+
+    @pytest.mark.asyncio
+    async def test_refresh_presets(self, player):
+        """Test refresh presets command."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+
+        # Initial presets
+        mock_preset1 = MagicMock()
+        mock_preset1.id = 1
+        mock_preset1.name = "Radio 1"
+        mock_pyblu_player.presets = AsyncMock(return_value=[mock_preset1])
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            assert len(player.presets) == 1
+
+            # Update presets mock for refresh
+            mock_preset2 = MagicMock()
+            mock_preset2.id = 2
+            mock_preset2.name = "Radio 2"
+            mock_pyblu_player.presets = AsyncMock(return_value=[mock_preset1, mock_preset2])
+
+            result = await player.refresh_presets()
+
+            assert result is True
+            assert len(player.presets) == 2
+
+    def test_get_simple_commands(self, player):
+        """Test getting simple commands list."""
+        # Add some mock presets
+        mock_preset1 = MagicMock()
+        mock_preset1.id = 1
+        mock_preset1.name = "Radio 1"
+        mock_preset2 = MagicMock()
+        mock_preset2.id = 2
+        mock_preset2.name = "Radio 2"
+        player._presets = [mock_preset1, mock_preset2]
+
+        commands = player.get_simple_commands()
+
+        assert "PRESET_1" in commands
+        assert "PRESET_2" in commands
+        assert "REFRESH_PRESETS" in commands
+        assert "SHUFFLE_TOGGLE" in commands
+        assert "REPEAT_TOGGLE" in commands
+        assert "SLEEP_TIMER" in commands
+
+    @pytest.mark.asyncio
+    async def test_play_error(self, player):
+        """Test play command handles errors gracefully."""
+        from pyblu.errors import PlayerError
+
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.play = AsyncMock(side_effect=PlayerError("Connection failed"))
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.play()
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_set_volume_error(self, player):
+        """Test set volume command handles errors gracefully."""
+        from pyblu.errors import PlayerError
+
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.volume = AsyncMock(side_effect=PlayerError("Volume failed"))
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.set_volume(50)
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_select_source_not_found(self, player):
+        """Test select source with non-existent source."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.select_source("nonexistent_source")
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_load_preset_by_command_invalid(self, player):
+        """Test load preset by command with invalid command."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            result = await player.load_preset_by_command("INVALID_COMMAND")
+
+            assert result is False
+
+    def test_is_available_false_when_no_player(self, player):
+        """Test _is_available returns False when no player."""
+        assert player._is_available() is False
+
+    @pytest.mark.asyncio
+    async def test_is_available_true_when_connected(self, player):
+        """Test _is_available returns True when connected."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            assert player._is_available() is True

@@ -368,14 +368,17 @@ async def _on_exit_standby() -> None:
     # Clear cached attributes so all current values are sent to the remote
     for device_id, entity in _entities.items():
         entity.clear_cached_attributes()
-        # Also clear cached attributes for select entity
         if device_id in _select_entities:
             _select_entities[device_id].clear_cached_attributes()
-        if device_id in _configured_players:
-            player = _configured_players[device_id]
-            if player.available:
-                _LOG.debug("Refreshing status for %s after standby exit", device_id)
-                await player.poll_status(use_etag=False)
+
+    # Parallel status refresh for all available players
+    available_players = [(device_id, player) for device_id, player in _configured_players.items() if player.available]
+    if available_players:
+        _LOG.debug("Refreshing status for %d players after standby exit", len(available_players))
+        await asyncio.gather(
+            *[player.poll_status(use_etag=False) for _, player in available_players],
+            return_exceptions=True,
+        )
 
 
 @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)

@@ -190,6 +190,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.play()
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.play.assert_called_once()
@@ -225,6 +227,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.pause()
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.pause.assert_called_once()
@@ -260,6 +264,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.stop()
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.stop.assert_called_once()
@@ -359,6 +365,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.set_volume(50)
+            # Wait for volume worker to process the queue
+            await player._volume_queue.join()
 
             assert result is True
             mock_pyblu_player.volume.assert_called_once_with(level=50)
@@ -393,9 +401,11 @@ class TestBluOSPlayer:
             await player.connect()
 
             await player.set_volume(-10)
+            await player._volume_queue.join()
             mock_pyblu_player.volume.assert_called_with(level=0)
 
             await player.set_volume(150)
+            await player._volume_queue.join()
             mock_pyblu_player.volume.assert_called_with(level=100)
 
     @pytest.mark.asyncio
@@ -427,6 +437,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.mute(True)
+            # Wait for mute worker to process the queue
+            await player._mute_queue.join()
 
             assert result is True
             mock_pyblu_player.volume.assert_called_once_with(mute=True)
@@ -472,6 +484,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.set_shuffle(True)
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player._session.get.assert_called_once()
@@ -525,6 +539,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.set_repeat(RepeatMode.ALL)
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             assert player.repeat_mode == RepeatMode.ALL
@@ -629,6 +645,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.seek(120)
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             call_args = mock_pyblu_player._session.get.call_args
@@ -668,6 +686,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.toggle_sleep_timer()
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result == 15
             assert player.sleep_timer == 15
@@ -757,6 +777,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.select_source("My Radio")
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(1)
@@ -798,6 +820,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.select_source("preset:2")
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(2)
@@ -840,6 +864,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.select_source("hdmi1")
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.play_url.assert_called_once_with(mock_input.url)
@@ -881,6 +907,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.load_preset_by_command("PRESET_3")
+            # Allow scheduled poll task to run
+            await asyncio.sleep(0)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(3)
@@ -919,6 +947,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.volume_up()
+            # Wait for volume worker to process the queue
+            await player._volume_queue.join()
 
             assert result is True
             # Volume step is 5 by default, so 50 + 5 = 55
@@ -953,6 +983,8 @@ class TestBluOSPlayer:
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
             result = await player.volume_down()
+            # Wait for volume worker to process the queue
+            await player._volume_queue.join()
 
             assert result is True
             # Volume step is 5 by default, so 50 - 5 = 45
@@ -1025,7 +1057,7 @@ class TestBluOSPlayer:
 
     @pytest.mark.asyncio
     async def test_set_volume_error(self, player):
-        """Test set volume command handles errors gracefully."""
+        """Test set volume command handles errors gracefully in worker."""
         from pyblu.errors import PlayerError
 
         mock_pyblu_player = MagicMock()
@@ -1036,9 +1068,14 @@ class TestBluOSPlayer:
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
+            # set_volume now queues the command and returns True immediately
             result = await player.set_volume(50)
+            # Wait for volume worker to process (and handle) the error
+            await player._volume_queue.join()
 
-            assert result is False
+            # Command is queued successfully, error is handled in worker
+            assert result is True
+            mock_pyblu_player.volume.assert_called_once_with(level=50)
 
     @pytest.mark.asyncio
     async def test_select_source_not_found(self, player):

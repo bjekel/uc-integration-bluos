@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from enum import StrEnum
 from typing import Any, Optional
 
@@ -81,6 +82,23 @@ class BluOSPlayer:
         self._sleep_timer = 0
         self._current_preset_name: str | None = None
 
+        # Volume handling - worker queues for sequential processing
+        self._volume_queue: asyncio.Queue[int | None] = asyncio.Queue()
+        self._mute_queue: asyncio.Queue[bool | None] = asyncio.Queue()
+        self._volume_worker_task: asyncio.Task | None = None
+        self._mute_worker_task: asyncio.Task | None = None
+
+        # Target state tracking - requested vs actual volume/mute state
+        self._target_volume: int | None = None
+        self._target_mute: bool | None = None
+
+        # Volume debouncing - prevents UI jitter by ignoring duplicate updates
+        self._last_volume_update: tuple[int, float] | None = None  # (volume, timestamp)
+        self._volume_debounce_ms: int = 100
+
+        # Pre-mute volume storage - stores volume before mute to restore when unmuting
+        self._volume_before_mute: int | None = None
+
     @property
     def id(self) -> str:
         """Device ID."""
@@ -140,6 +158,34 @@ class BluOSPlayer:
         """Check if player is connected and available for commands."""
         return self._player is not None and self._available
 
+    async def _volume_worker(self) -> None:
+        """Process volume commands from queue sequentially."""
+        while True:
+            volume = await self._volume_queue.get()
+            if volume is None:  # Shutdown signal
+                break
+            try:
+                await self._player.volume(level=volume)
+                await asyncio.sleep(0.1)  # Device processing delay
+            except PlayerError as e:
+                _LOG.error("Volume worker error: %s", e)
+            finally:
+                self._volume_queue.task_done()
+
+    async def _mute_worker(self) -> None:
+        """Process mute commands from queue sequentially."""
+        while True:
+            muted = await self._mute_queue.get()
+            if muted is None:  # Shutdown signal
+                break
+            try:
+                await self._player.volume(mute=muted)
+                await asyncio.sleep(0.1)  # Device processing delay
+            except PlayerError as e:
+                _LOG.error("Mute worker error: %s", e)
+            finally:
+                self._mute_queue.task_done()
+
     async def connect(self) -> bool:
         """
         Connect to the BluOS player.
@@ -169,6 +215,11 @@ class BluOSPlayer:
             self._available = True
             self._reconnect_delay = MIN_RECONNECT_DELAY
             self._connecting = False
+
+            # Start volume/mute worker tasks
+            self._volume_worker_task = asyncio.create_task(self._volume_worker())
+            self._mute_worker_task = asyncio.create_task(self._mute_worker())
+
             _LOG.info("Connected to %s at %s, emitting CONNECTED event", self._device.name, self._device.address)
             self._events.emit(Events.CONNECTED)
             return True
@@ -195,6 +246,14 @@ class BluOSPlayer:
         if self._reconnect_task:
             self._reconnect_task.cancel()
             self._reconnect_task = None
+
+        # Stop volume/mute workers
+        if self._volume_worker_task:
+            await self._volume_queue.put(None)  # Shutdown signal
+            self._volume_worker_task = None
+        if self._mute_worker_task:
+            await self._mute_queue.put(None)  # Shutdown signal
+            self._mute_worker_task = None
 
         if self._player:
             try:
@@ -305,10 +364,32 @@ class BluOSPlayer:
         image_url = self._get_absolute_image_url(status.image)
         # Update sleep timer from status
         self._sleep_timer = status.sleep or 0
+
+        # Volume debouncing - use target if recently set to prevent UI jitter
+        volume = status.volume
+        if self._target_volume is not None:
+            now = time.time()
+            if self._last_volume_update:
+                last_vol, last_time = self._last_volume_update
+                if (now - last_time) * 1000 < self._volume_debounce_ms:
+                    volume = self._target_volume
+            self._last_volume_update = (volume if volume is not None else 0, now)
+            # Clear target if device caught up
+            if status.volume == self._target_volume:
+                self._target_volume = None
+
+        # Mute state tracking - use target if set
+        muted = status.mute
+        if self._target_mute is not None:
+            muted = self._target_mute
+            # Clear target if device caught up
+            if status.mute == self._target_mute:
+                self._target_mute = None
+
         return {
             "state": self._map_state(status.state),
-            "volume": status.volume,
-            "muted": status.mute,
+            "volume": volume,
+            "muted": muted,
             "media_title": status.name or "",
             "media_artist": status.artist or "",
             "media_album": status.album or "",
@@ -338,13 +419,17 @@ class BluOSPlayer:
 
     # Playback control methods
 
+    def _schedule_poll(self) -> None:
+        """Schedule a non-blocking status poll after command execution."""
+        asyncio.create_task(self.poll_status(use_etag=False))
+
     async def play(self) -> bool:
         """Start playback."""
         if not self._is_available():
             return False
         try:
             await self._player.play()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Play failed: %s", e)
@@ -356,7 +441,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.pause()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Pause failed: %s", e)
@@ -368,7 +453,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.stop()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Stop failed: %s", e)
@@ -380,7 +465,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.skip()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Skip failed: %s", e)
@@ -392,7 +477,7 @@ class BluOSPlayer:
             return False
         try:
             await self._player.back()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Back failed: %s", e)
@@ -407,23 +492,26 @@ class BluOSPlayer:
         """
         if not self._is_available():
             return False
-        try:
-            await self._player.volume(level=max(0, min(100, level)))
-            await self.poll_status(use_etag=False)
-            return True
-        except PlayerError as e:
-            _LOG.error("Set volume failed: %s", e)
-            return False
+        level = max(0, min(100, level))
+        self._target_volume = level
+        await self._volume_queue.put(level)
+        self._schedule_poll()
+        return True
 
     async def volume_up(self) -> bool:
         """Increase volume by configured step."""
         if not self._is_available():
             return False
         try:
-            status = await self._player.status()
-            new_level = min(100, (status.volume or 0) + self._device.volume_step)
-            await self._player.volume(level=new_level)
-            await self.poll_status(use_etag=False)
+            # Use target volume if set, otherwise get current from device
+            current = self._target_volume
+            if current is None:
+                status = await self._player.status()
+                current = status.volume or 0
+            new_level = min(100, current + self._device.volume_step)
+            self._target_volume = new_level
+            await self._volume_queue.put(new_level)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Volume up failed: %s", e)
@@ -434,10 +522,15 @@ class BluOSPlayer:
         if not self._is_available():
             return False
         try:
-            status = await self._player.status()
-            new_level = max(0, (status.volume or 0) - self._device.volume_step)
-            await self._player.volume(level=new_level)
-            await self.poll_status(use_etag=False)
+            # Use target volume if set, otherwise get current from device
+            current = self._target_volume
+            if current is None:
+                status = await self._player.status()
+                current = status.volume or 0
+            new_level = max(0, current - self._device.volume_step)
+            self._target_volume = new_level
+            await self._volume_queue.put(new_level)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Volume down failed: %s", e)
@@ -452,13 +545,24 @@ class BluOSPlayer:
         """
         if not self._is_available():
             return False
-        try:
-            await self._player.volume(mute=muted)
-            await self.poll_status(use_etag=False)
-            return True
-        except PlayerError as e:
-            _LOG.error("Mute failed: %s", e)
-            return False
+
+        # Store volume before muting
+        if muted and self._volume_before_mute is None:
+            try:
+                status = await self._player.status()
+                if status.volume and status.volume > 0:
+                    self._volume_before_mute = status.volume
+            except PlayerError:
+                pass
+
+        # Clear stored volume when unmuting
+        if not muted:
+            self._volume_before_mute = None
+
+        self._target_mute = muted
+        await self._mute_queue.put(muted)
+        self._schedule_poll()
+        return True
 
     async def toggle_mute(self) -> bool:
         """Toggle mute state."""
@@ -467,7 +571,7 @@ class BluOSPlayer:
         try:
             status = await self._player.status()
             await self._player.volume(mute=not status.mute)
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except PlayerError as e:
             _LOG.error("Toggle mute failed: %s", e)
@@ -492,7 +596,7 @@ class BluOSPlayer:
                 url, params=params, timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 response.raise_for_status()
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Set shuffle failed: %s", e)
@@ -519,7 +623,7 @@ class BluOSPlayer:
                     if preset.id == preset_id:
                         self._current_preset_name = preset.name
                         break
-                await self.poll_status(use_etag=False)
+                self._schedule_poll()
                 return True
 
             # Check if it's a preset name
@@ -527,7 +631,7 @@ class BluOSPlayer:
                 if preset.name == source_id:
                     await self._player.load_preset(preset.id)
                     self._current_preset_name = preset.name
-                    await self.poll_status(use_etag=False)
+                    self._schedule_poll()
                     return True
 
             # Find input by ID or name (not a preset)
@@ -535,7 +639,7 @@ class BluOSPlayer:
                 if inp.id == source_id or inp.text == source_id:
                     await self._player.play_url(inp.url)
                     self._current_preset_name = None
-                    await self.poll_status(use_etag=False)
+                    self._schedule_poll()
                     return True
 
             _LOG.warning("Source not found: %s", source_id)
@@ -567,7 +671,7 @@ class BluOSPlayer:
                 if preset.id == preset_id:
                     self._current_preset_name = preset.name
                     break
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except (ValueError, PlayerError) as e:
             _LOG.error("Load preset by command failed: %s", e)
@@ -680,7 +784,7 @@ class BluOSPlayer:
                 response.raise_for_status()
                 self._repeat_mode = mode
                 _LOG.debug("Repeat mode set to %s", mode)
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Set repeat failed: %s", e)
@@ -713,7 +817,7 @@ class BluOSPlayer:
             ) as response:
                 response.raise_for_status()
                 _LOG.debug("Seek to %d succeeded", position)
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
             _LOG.error("Seek failed: %s", e)
@@ -733,7 +837,7 @@ class BluOSPlayer:
             new_value = await self._player.sleep_timer()
             self._sleep_timer = new_value
             _LOG.debug("Sleep timer set to %d minutes", new_value)
-            await self.poll_status(use_etag=False)
+            self._schedule_poll()
             return new_value
         except PlayerError as e:
             _LOG.error("Toggle sleep timer failed: %s", e)

@@ -120,6 +120,9 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             changed[Attributes.SOURCE_LIST] = source_list
             self._last_attributes[Attributes.SOURCE_LIST] = source_list
 
+        # Track if media_title changed (indicates new track)
+        track_changed = False
+
         # Map other attributes
         attr_mapping = {
             "volume": Attributes.VOLUME,
@@ -140,6 +143,16 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             if value is not None and value != last_value:
                 changed[uc_attr] = value
                 self._last_attributes[uc_attr] = value
+                # Detect track change
+                if uc_attr == Attributes.MEDIA_TITLE:
+                    track_changed = True
+
+        # Force position update on track change (even if value is same)
+        if track_changed:
+            position = attributes.get("media_position")
+            if position is not None:
+                changed[Attributes.MEDIA_POSITION] = position
+                self._last_attributes[Attributes.MEDIA_POSITION] = position
 
         # Handle repeat mode separately (needs mapping from BluOS to UC)
         repeat = attributes.get("repeat")
@@ -284,9 +297,13 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
             case Commands.NEXT:
                 result = await self._player.next_track()
+                # Clear position cache to force update on next poll
+                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.PREVIOUS:
                 result = await self._player.previous_track()
+                # Clear position cache to force update on next poll
+                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.FAST_FORWARD:
                 # Seek forward by SEEK_STEP seconds
@@ -294,12 +311,16 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
                 new_pos = min(current_pos + SEEK_STEP, duration) if duration else current_pos + SEEK_STEP
                 result = await self._player.seek(int(new_pos))
+                # Clear position cache to force update on next poll
+                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.REWIND:
                 # Seek backward by SEEK_STEP seconds
                 current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
                 new_pos = max(current_pos - SEEK_STEP, 0)
                 result = await self._player.seek(int(new_pos))
+                # Clear position cache to force update on next poll
+                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.VOLUME:
                 volume = params.get("volume")
@@ -348,6 +369,8 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 position = params.get("media_position")
                 if position is not None:
                     result = await self._player.seek(int(position))
+                    # Clear position cache to force update on next poll
+                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
                 else:
                     result = False
 

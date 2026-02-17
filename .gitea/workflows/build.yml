@@ -103,7 +103,7 @@ jobs:
           tar -czf ../artifacts/uc-intg-${{ env.INTG_NAME }}-${{ steps.version.outputs.version }}-aarch64.tar.gz .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: uc-intg-${{ env.INTG_NAME }}
           path: artifacts/*.tar.gz
@@ -113,7 +113,7 @@ jobs:
     needs: [build]
     if: startsWith(gitea.ref, 'refs/tags/v')
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           name: uc-intg-${{ env.INTG_NAME }}
           path: artifacts

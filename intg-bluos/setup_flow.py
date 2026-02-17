@@ -6,11 +6,6 @@ from enum import IntEnum
 from typing import Any
 
 from config import BluOSDevice
-
-# Validation constants
-MIN_PORT = 1
-MAX_PORT = 65535
-DEFAULT_BLUOS_PORT = 11000
 from discover import DiscoveredDevice, discover_bluos_players
 from ucapi import (
     AbortDriverSetup,
@@ -22,6 +17,11 @@ from ucapi import (
     SetupError,
     UserDataResponse,
 )
+
+# Validation constants
+MIN_PORT = 1
+MAX_PORT = 65535
+DEFAULT_BLUOS_PORT = 11000
 
 _LOG = logging.getLogger(__name__)
 
@@ -419,7 +419,10 @@ async def _handle_device_choice(msg: UserDataResponse) -> SetupAction:
     """Handle device selection."""
     global _setup_step, _selected_device
 
-    device_index = int(msg.input_values.get("device", "0"))
+    try:
+        device_index = int(msg.input_values.get("device", "0"))
+    except (ValueError, TypeError):
+        return SetupError()
 
     if 0 <= device_index < len(_discovered_devices):
         _selected_device = _discovered_devices[device_index]
@@ -498,9 +501,18 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
         return SetupError()
 
     name = msg.input_values.get("name", _selected_device.name)
-    volume_step = int(msg.input_values.get("volume_step", 5))
-    timeout = float(msg.input_values.get("timeout", 5))
-    standby_timeout = int(msg.input_values.get("standby_timeout", 60))
+    try:
+        volume_step = int(msg.input_values.get("volume_step", 5))
+    except (ValueError, TypeError):
+        volume_step = 5
+    try:
+        timeout = float(msg.input_values.get("timeout", 5))
+    except (ValueError, TypeError):
+        timeout = 5.0
+    try:
+        standby_timeout = int(msg.input_values.get("standby_timeout", 60))
+    except (ValueError, TypeError):
+        standby_timeout = 60
 
     # Create device configuration
     # Use MAC if available, otherwise generate from IP

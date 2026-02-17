@@ -4,7 +4,6 @@ import asyncio
 import logging
 import socket
 from dataclasses import dataclass
-from typing import Optional
 
 from zeroconf import ServiceStateChange, Zeroconf
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
@@ -23,8 +22,8 @@ class DiscoveredDevice:
     host: str
     port: int
     name: str
-    model: Optional[str] = None
-    mac: Optional[str] = None
+    model: str | None = None
+    mac: str | None = None
 
 
 class BluOSDiscovery:
@@ -33,8 +32,8 @@ class BluOSDiscovery:
     def __init__(self):
         """Initialize discovery."""
         self._devices: dict[str, DiscoveredDevice] = {}
-        self._azc: Optional[AsyncZeroconf] = None
-        self._browser: Optional[AsyncServiceBrowser] = None
+        self._azc: AsyncZeroconf | None = None
+        self._browser: AsyncServiceBrowser | None = None
 
     async def discover(self, timeout: float = 5.0) -> list[DiscoveredDevice]:
         """
@@ -144,7 +143,7 @@ class BluOSDiscovery:
         _LOG.info("Discovered: %s (%s) at %s:%d", device.name, device.model, host, port)
 
     @staticmethod
-    def _get_property(properties: dict, key: str) -> Optional[str]:
+    def _get_property(properties: dict, key: str) -> str | None:
         """Get string property from service properties."""
         value = properties.get(key.encode()) or properties.get(key)
         if value is None:

@@ -4,8 +4,8 @@ import dataclasses
 import json
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Callable
 
 _LOG = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class BluOSDevice:
     volume_step: int = 5
     timeout: float = 5.0
     standby_timeout: int = 60
-    model: Optional[str] = None
+    model: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -57,8 +57,8 @@ class Devices:
     def __init__(
         self,
         data_path: str,
-        add_handler: Optional[Callable[[BluOSDevice], None]] = None,
-        remove_handler: Optional[Callable[[str], None]] = None,
+        add_handler: Callable[[BluOSDevice], None] | None = None,
+        remove_handler: Callable[[str], None] | None = None,
     ):
         """
         Initialize device manager.
@@ -168,7 +168,7 @@ class Devices:
 
         return True
 
-    def get(self, device_id: str) -> Optional[BluOSDevice]:
+    def get(self, device_id: str) -> BluOSDevice | None:
         """
         Get device configuration by ID.
 
@@ -195,7 +195,11 @@ class Devices:
         """Remove all devices."""
         device_ids = list(self._devices.keys())
         for device_id in device_ids:
-            self.remove(device_id)
+            device = self._devices.pop(device_id)
+            if self._remove_handler:
+                _LOG.info("Device removed: %s (%s)", device.name, device_id)
+                self._remove_handler(device_id)
+        self.store()
 
     def __len__(self) -> int:
         """Return number of configured devices."""

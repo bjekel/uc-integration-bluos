@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 from config import BluOSDevice
@@ -68,14 +68,14 @@ class BluOSPlayer:
         """
         self._device = device
         self._loop = loop
-        self._player: Optional[Player] = None
+        self._player: Player | None = None
         self._events = AsyncIOEventEmitter()
         self._available = False
         self._connecting = False
         self._state = States.UNKNOWN
-        self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_task: asyncio.Task | None = None
         self._reconnect_delay = MIN_RECONNECT_DELAY
-        self._last_etag: Optional[str] = None
+        self._last_etag: str | None = None
         self._inputs: list[Input] = []
         self._presets: list[Preset] = []
         self._repeat_mode = RepeatMode.OFF
@@ -250,9 +250,17 @@ class BluOSPlayer:
         # Stop volume/mute workers
         if self._volume_worker_task:
             await self._volume_queue.put(None)  # Shutdown signal
+            try:
+                await self._volume_worker_task
+            except Exception:
+                pass
             self._volume_worker_task = None
         if self._mute_worker_task:
             await self._mute_queue.put(None)  # Shutdown signal
+            try:
+                await self._mute_worker_task
+            except Exception:
+                pass
             self._mute_worker_task = None
 
         if self._player:
@@ -309,7 +317,7 @@ class BluOSPlayer:
             _LOG.warning("Failed to load presets: %s", e)
             self._presets = []
 
-    async def poll_status(self, use_etag: bool = True) -> Optional[dict[str, Any]]:
+    async def poll_status(self, use_etag: bool = True) -> dict[str, Any] | None:
         """
         Poll for status updates using long-polling.
 
@@ -370,7 +378,7 @@ class BluOSPlayer:
         if self._target_volume is not None:
             now = time.time()
             if self._last_volume_update:
-                last_vol, last_time = self._last_volume_update
+                _, last_time = self._last_volume_update
                 if (now - last_time) * 1000 < self._volume_debounce_ms:
                     volume = self._target_volume
             self._last_volume_update = (volume if volume is not None else 0, now)
@@ -403,7 +411,7 @@ class BluOSPlayer:
         }
 
     @staticmethod
-    def _map_state(bluos_state: Optional[str]) -> States:
+    def _map_state(bluos_state: str | None) -> States:
         """Map BluOS state to UC state."""
         if not bluos_state:
             return States.UNKNOWN
@@ -421,7 +429,14 @@ class BluOSPlayer:
 
     def _schedule_poll(self) -> None:
         """Schedule a non-blocking status poll after command execution."""
-        asyncio.create_task(self.poll_status(use_etag=False))
+        task = asyncio.create_task(self.poll_status(use_etag=False))
+        task.add_done_callback(self._poll_task_done)
+
+    @staticmethod
+    def _poll_task_done(task: asyncio.Task) -> None:
+        """Log exceptions from fire-and-forget poll tasks."""
+        if not task.cancelled() and task.exception():
+            _LOG.debug("Scheduled poll task failed: %s", task.exception())
 
     async def play(self) -> bool:
         """Start playback."""
@@ -570,9 +585,8 @@ class BluOSPlayer:
             return False
         try:
             status = await self._player.status()
-            await self._player.volume(mute=not status.mute)
-            self._schedule_poll()
-            return True
+            new_mute = not status.mute
+            return await self.mute(new_mute)
         except PlayerError as e:
             _LOG.error("Toggle mute failed: %s", e)
             return False
@@ -715,7 +729,7 @@ class BluOSPlayer:
 
     # Multi-room grouping methods
 
-    async def get_sync_status(self) -> Optional[SyncStatus]:
+    async def get_sync_status(self) -> SyncStatus | None:
         """Get multi-room synchronization status."""
         if not self._is_available():
             return None

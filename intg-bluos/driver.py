@@ -321,9 +321,10 @@ async def _on_connect() -> None:
     players_to_connect = [p for p in _configured_players.values() if not p.available]
     if players_to_connect:
         await api.set_device_state(ucapi.DeviceStates.CONNECTING)
-
-    for player in players_to_connect:
-        await player.connect()
+        await asyncio.gather(
+            *[player.connect() for player in players_to_connect],
+            return_exceptions=True,
+        )
 
     # Update device state after connection attempts
     await _update_device_state()
@@ -356,10 +357,10 @@ async def _on_exit_standby() -> None:
     players_to_connect = [p for p in _configured_players.values() if not p.available]
     if players_to_connect:
         await api.set_device_state(ucapi.DeviceStates.CONNECTING)
-
-    # Reconnect players that are not available
-    for player in players_to_connect:
-        await player.connect()
+        await asyncio.gather(
+            *[player.connect() for player in players_to_connect],
+            return_exceptions=True,
+        )
 
     # Update device state after reconnection attempts
     await _update_device_state()

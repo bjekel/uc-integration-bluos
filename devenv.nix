@@ -1,5 +1,8 @@
-{ pkgs, lib, config, ... }:
+{ pkgs, inputs, lib, config, ... }:
 
+let
+  pkgs-unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; config.allowUnfree = true; };
+in
 {
   cachix.enable = false;
 
@@ -27,7 +30,7 @@
 
   # Common packages for all profiles
   packages = with pkgs; [
-    claude-code
+    pkgs-unstable.claude-code
     git
     gnumake
     jq

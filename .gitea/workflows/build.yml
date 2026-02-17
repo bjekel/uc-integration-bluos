@@ -52,7 +52,7 @@ jobs:
       - name: Validate version
         if: startsWith(gitea.ref, 'refs/tags/v')
         run: |
-          TAG_VERSION=${GITEA_REF#refs/tags/v}
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
           DRIVER_VERSION=$(jq -r '.version' driver.json)
           if [ "$TAG_VERSION" != "$DRIVER_VERSION" ]; then
             echo "Version mismatch: tag=$TAG_VERSION, driver.json=$DRIVER_VERSION"
@@ -62,8 +62,8 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [[ "$GITEA_REF" == refs/tags/v* ]]; then
-            VERSION=${GITEA_REF#refs/tags/v}
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
           else
             VERSION=$(jq -r '.version' driver.json)-dev.${{ gitea.run_number }}
           fi

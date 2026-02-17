@@ -72,27 +72,35 @@ jobs:
       - name: Set up QEMU
         run: docker run --rm --privileged tonistiigi/binfmt --install arm64
 
+      - name: Set up Docker Buildx
+        run: docker buildx create --name arm64builder --use
+
       - name: Build with PyInstaller (aarch64)
         run: |
-          docker run --rm \
-            -v ${{ gitea.workspace }}:/src \
-            --platform linux/arm64 \
-            docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYINSTALLER_TAG }} \
-            bash -c "cd /src && \
-              pip install -r requirements.txt && \
-              pyinstaller --clean --onedir \
-                --name intg-${{ env.INTG_NAME }} \
-                --add-data 'driver.json:.' \
-                intg-bluos/driver.py"
+          docker buildx build --platform linux/arm64 \
+            --output type=local,dest=. \
+            -f - . <<'DOCKERFILE'
+          FROM docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYINSTALLER_TAG }} AS build
+          WORKDIR /src
+          COPY requirements.txt .
+          RUN pip install -r requirements.txt
+          COPY . .
+          RUN pyinstaller --clean --onedir \
+            --name intg-${{ env.INTG_NAME }} \
+            --add-data 'driver.json:.' \
+            intg-bluos/driver.py
+          FROM scratch
+          COPY --from=build /src/dist/ /
+          DOCKERFILE
 
       - name: Package artifact
         run: |
           mkdir -p artifacts
-          cd dist/intg-${{ env.INTG_NAME }}
-          cp ../../driver.json .
-          cp ../../LICENSE .
+          cd intg-${{ env.INTG_NAME }}
+          cp ../driver.json .
+          cp ../LICENSE .
           echo "${{ steps.version.outputs.version }}" > version.txt
-          tar -czf ../../artifacts/uc-intg-${{ env.INTG_NAME }}-${{ steps.version.outputs.version }}-aarch64.tar.gz .
+          tar -czf ../artifacts/uc-intg-${{ env.INTG_NAME }}-${{ steps.version.outputs.version }}-aarch64.tar.gz .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

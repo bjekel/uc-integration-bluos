@@ -5,7 +5,6 @@
 
   # CLI-specific packages
   packages = with pkgs; [
-    tmux
     jq
     python311Packages.pyinstaller
   ];

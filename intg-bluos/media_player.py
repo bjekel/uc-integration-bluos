@@ -8,6 +8,15 @@ from bluos import BluOSPlayer
 from bluos import RepeatMode as BluOSRepeatMode
 from bluos import States as BluOSStates
 from config import BluOSDevice
+from ucapi.api_definitions import (
+    BrowseMediaItem,
+    BrowseOptions,
+    BrowseResults,
+    Pagination,
+    SearchOptions,
+    SearchResults,
+    StatusCodes,
+)
 from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, RepeatMode, States
 
 _LOG = logging.getLogger(__name__)
@@ -37,7 +46,41 @@ BLUOS_FEATURES = [
     Features.MEDIA_IMAGE_URL,
     Features.MEDIA_DURATION,
     Features.MEDIA_POSITION,
+    Features.BROWSE_MEDIA,
+    Features.SEARCH_MEDIA,
+    Features.PLAY_MEDIA,
+    Features.CLEAR_PLAYLIST,
 ]
+
+# Mapping from BluOS item type to UC MediaClass
+_BLUOS_TYPE_TO_MEDIA_CLASS = {
+    "link": "directory",
+    "audio": "track",
+    "artist": "artist",
+    "composer": "composer",
+    "album": "album",
+    "playlist": "playlist",
+    "track": "track",
+    "folder": "directory",
+    "section": "directory",
+    "category": "directory",
+    "text": "directory",
+}
+
+# Mapping from BluOS item type to UC MediaContentType
+_BLUOS_TYPE_TO_CONTENT_TYPE = {
+    "link": "music",
+    "audio": "radio",
+    "artist": "artist",
+    "composer": "artist",
+    "album": "album",
+    "playlist": "playlist",
+    "track": "track",
+    "folder": "music",
+    "section": "music",
+    "category": "music",
+    "text": "music",
+}
 
 # Seek step for fast forward/rewind in seconds
 SEEK_STEP = 10
@@ -90,6 +133,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self._device = device
         self._player = player
         self._last_attributes: dict[str, Any] = {}
+        self._last_search_key: str | None = None
 
     @property
     def player(self) -> BluOSPlayer:
@@ -216,6 +260,97 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             BluOSRepeatMode.ONE: RepeatMode.ONE,
         }
         return repeat_map.get(bluos_repeat, RepeatMode.OFF)
+
+    def _bluos_item_to_browse_item(self, item: dict[str, Any]) -> BrowseMediaItem:
+        """Convert a BluOS browse item dict to a UC BrowseMediaItem."""
+        bluos_type = item.get("type", "link")
+        media_class = _BLUOS_TYPE_TO_MEDIA_CLASS.get(bluos_type, "directory")
+        media_type = _BLUOS_TYPE_TO_CONTENT_TYPE.get(bluos_type, "music")
+
+        browse_key = item.get("browse_key")
+        play_url = item.get("play_url") or item.get("autoplay_url")
+
+        # Use browseKey as media_id for browsable items, playURL for play-only items
+        if browse_key:
+            media_id = browse_key
+        elif play_url:
+            media_id = play_url
+        else:
+            media_id = item.get("text", "")
+
+        thumbnail = self._player._get_absolute_image_url(item.get("image")) if item.get("image") else None
+
+        # Convert nested items (categories)
+        sub_items = None
+        if "items" in item and item["items"]:
+            sub_items = [self._bluos_item_to_browse_item(sub) for sub in item["items"]]
+
+        return BrowseMediaItem(
+            title=item.get("text", ""),
+            media_class=media_class,
+            media_type=media_type,
+            media_id=media_id,
+            can_browse=browse_key is not None,
+            can_play=play_url is not None,
+            subtitle=item.get("text2"),
+            thumbnail=thumbnail,
+            items=sub_items,
+        )
+
+    async def browse(self, options: BrowseOptions) -> BrowseResults | StatusCodes:
+        """Browse BluOS music content."""
+        _LOG.debug("Browse request: media_id=%s, paging=%s", options.media_id, options.paging)
+
+        raw = await self._player.browse(key=options.media_id)
+
+        if "error" in raw and raw["error"]:
+            _LOG.warning("Browse error: %s", raw["error"])
+            return StatusCodes.SERVER_ERROR
+
+        items = [self._bluos_item_to_browse_item(item) for item in raw.get("items", [])]
+
+        # Store search_key for later use by search()
+        if raw.get("search_key"):
+            self._last_search_key = raw["search_key"]
+
+        # Build the container item
+        service_name = raw.get("service_name") or "BluOS"
+        container = BrowseMediaItem(
+            title=service_name,
+            media_class="directory",
+            media_type="music",
+            media_id=options.media_id or "",
+            can_browse=True,
+            items=items,
+        )
+
+        return BrowseResults(
+            media=container,
+            pagination=Pagination(page=1, limit=len(items), count=len(items)),
+        )
+
+    async def search(self, options: SearchOptions) -> SearchResults | StatusCodes:
+        """Search BluOS music content."""
+        _LOG.debug("Search request: query=%s, media_id=%s", options.query, options.media_id)
+
+        # Use provided media_id as search_key, or fall back to last known search_key
+        search_key = options.media_id or getattr(self, "_last_search_key", None)
+        if not search_key:
+            _LOG.warning("No search key available. Browse a music service first.")
+            return StatusCodes.BAD_REQUEST
+
+        raw = await self._player.search(search_key=search_key, query=options.query)
+
+        if "error" in raw and raw["error"]:
+            _LOG.warning("Search error: %s", raw["error"])
+            return StatusCodes.SERVER_ERROR
+
+        items = [self._bluos_item_to_browse_item(item) for item in raw.get("items", [])]
+
+        return SearchResults(
+            media=items,
+            pagination=Pagination(page=1, limit=len(items), count=len(items)),
+        )
 
     async def command(
         self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any = None
@@ -380,6 +515,16 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                     result = await self._player.select_source(source)
                 else:
                     result = False
+
+            case Commands.PLAY_MEDIA:
+                media_id = params.get("media_id")
+                if media_id:
+                    result = await self._player.play_browse_item(media_id)
+                else:
+                    result = False
+
+            case Commands.CLEAR_PLAYLIST:
+                result = await self._player.clear_queue()
 
             case _:
                 _LOG.warning("Unsupported command: %s", cmd_id)

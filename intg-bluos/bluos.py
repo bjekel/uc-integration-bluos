@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import time
+import xml.etree.ElementTree as ET
 from enum import StrEnum
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from config import BluOSDevice
@@ -856,3 +858,179 @@ class BluOSPlayer:
         except PlayerError as e:
             _LOG.error("Toggle sleep timer failed: %s", e)
             return self._sleep_timer
+
+    # Browse and search methods
+
+    def _parse_browse_xml(self, xml_text: str) -> dict[str, Any]:
+        """
+        Parse BluOS /Browse XML response into a structured dict.
+
+        Returns:
+            Dict with keys: items, next_key, search_key, parent_key, service_name,
+            service_icon, browse_type
+        """
+        root = ET.fromstring(xml_text)
+
+        # Check for error response
+        if root.tag == "error":
+            message = root.findtext("message", "Unknown error")
+            _LOG.warning("Browse error: %s", message)
+            return {"items": [], "error": message}
+
+        result: dict[str, Any] = {
+            "items": [],
+            "next_key": root.get("nextKey"),
+            "search_key": root.get("searchKey"),
+            "parent_key": root.get("parentKey"),
+            "service_name": root.get("serviceName"),
+            "service_icon": root.get("serviceIcon"),
+            "browse_type": root.get("type", "menu"),
+        }
+
+        def parse_item(elem: ET.Element) -> dict[str, Any]:
+            item: dict[str, Any] = {
+                "text": elem.get("text", ""),
+                "text2": elem.get("text2"),
+                "image": elem.get("image"),
+                "type": elem.get("type", "link"),
+                "browse_key": elem.get("browseKey"),
+                "play_url": elem.get("playURL"),
+                "autoplay_url": elem.get("autoplayURL"),
+                "context_menu_key": elem.get("contextMenuKey"),
+                "action_url": elem.get("actionURL"),
+                "input_type": elem.get("inputType"),
+            }
+            return item
+
+        # Items can be directly under <browse> or inside <category> elements
+        for category in root.findall("category"):
+            cat_items = []
+            for item_elem in category.findall("item"):
+                cat_items.append(parse_item(item_elem))
+            if cat_items:
+                # Add category as a directory-like item containing sub-items
+                result["items"].append(
+                    {
+                        "text": category.get("text", ""),
+                        "type": "category",
+                        "browse_key": None,
+                        "play_url": None,
+                        "autoplay_url": None,
+                        "image": None,
+                        "text2": None,
+                        "context_menu_key": None,
+                        "action_url": None,
+                        "input_type": None,
+                        "items": cat_items,
+                    }
+                )
+
+        # Direct items under <browse>
+        for item_elem in root.findall("item"):
+            result["items"].append(parse_item(item_elem))
+
+        return result
+
+    async def browse(self, key: str | None = None) -> dict[str, Any]:
+        """
+        Browse music content on the BluOS player.
+
+        Args:
+            key: Browse key for navigation. None for top-level browse.
+
+        Returns:
+            Parsed browse results dict.
+        """
+        if not self._is_available():
+            return {"items": [], "error": "Player not available"}
+
+        try:
+            url = f"{self._player.base_url}/Browse"
+            params: dict[str, str] = {}
+            if key:
+                params["key"] = key
+
+            _LOG.debug("Browse request: %s params=%s", url, params)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response.raise_for_status()
+                xml_text = await response.text()
+                _LOG.debug("Browse response length: %d", len(xml_text))
+                return self._parse_browse_xml(xml_text)
+
+        except (aiohttp.ClientError, ET.ParseError) as e:
+            _LOG.error("Browse failed: %s", e)
+            return {"items": [], "error": str(e)}
+
+    async def search(self, search_key: str, query: str) -> dict[str, Any]:
+        """
+        Search music content on the BluOS player.
+
+        Args:
+            search_key: The searchKey from a previous browse response.
+            query: Search text.
+
+        Returns:
+            Parsed search results dict.
+        """
+        if not self._is_available():
+            return {"items": [], "error": "Player not available"}
+
+        try:
+            url = f"{self._player.base_url}/Browse"
+            params = {"key": search_key, "q": query}
+
+            _LOG.debug("Search request: %s params=%s", url, params)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response.raise_for_status()
+                xml_text = await response.text()
+                return self._parse_browse_xml(xml_text)
+
+        except (aiohttp.ClientError, ET.ParseError) as e:
+            _LOG.error("Search failed: %s", e)
+            return {"items": [], "error": str(e)}
+
+    async def play_browse_item(self, play_url: str) -> bool:
+        """
+        Play an item from browse results using its playURL.
+
+        Args:
+            play_url: The playURL or autoplayURL from a browse item.
+        """
+        if not self._is_available():
+            return False
+
+        try:
+            # playURL is typically a relative URI like /Play?url=...
+            if play_url.startswith(("http://", "https://")):
+                full_url = play_url
+            else:
+                base = self._player.base_url
+                full_url = f"{base}{play_url}" if play_url.startswith("/") else f"{base}/{play_url}"
+
+            _LOG.debug("Playing browse item: %s", full_url)
+            async with self._player._session.get(full_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                response.raise_for_status()
+            self._schedule_poll()
+            return True
+        except (aiohttp.ClientError, PlayerError) as e:
+            _LOG.error("Play browse item failed: %s", e)
+            return False
+
+    async def clear_queue(self) -> bool:
+        """Clear the play queue."""
+        if not self._is_available():
+            return False
+
+        try:
+            url = f"{self._player.base_url}/Clear"
+            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                response.raise_for_status()
+            self._schedule_poll()
+            return True
+        except (aiohttp.ClientError, PlayerError) as e:
+            _LOG.error("Clear queue failed: %s", e)
+            return False

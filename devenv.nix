@@ -96,11 +96,8 @@ in
 
     build-aarch64.exec = ''
       echo "Building BluOS integration for aarch64 using Docker..."
-      echo "Note: Requires Docker with QEMU emulation. On first run, execute:"
-      echo "  sudo apt install qemu-system-arm binfmt-support qemu-user-static"
-      echo "  docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
-      echo ""
-      docker run --rm --name builder \
+
+      if ! docker run --rm --name builder \
         --platform=linux/arm64 \
         --user=$(id -u):$(id -g) \
         -v "$PWD":/workspace \
@@ -112,7 +109,10 @@ in
         pyinstaller --clean --onedir --name driver -y \
         --paths intg-bluos \
         --add-data driver.json:. \
-        intg-bluos/driver.py'
+        intg-bluos/driver.py'; then
+        echo "Docker build failed!"
+        exit 1
+      fi
       echo "Build complete: dist/driver/"
     '';
 
@@ -138,14 +138,14 @@ in
     setup-qemu = {
       exec = ''
         if [ "$(uname -m)" = "x86_64" ]; then
-          echo "Setting up Qemu for aarch64 emulation..."
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          echo "✓ Qemu setup complete!"
+          echo "Setting up QEMU for aarch64 emulation..."
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          echo "✓ QEMU setup complete!"
         else
-          echo "Running on aarch64, Qemu not needed"
+          echo "Running on aarch64, QEMU not needed"
         fi
       '';
-      description = "Setup Qemu for aarch64 emulation (x86-64 only)";
+      description = "Setup QEMU for aarch64 emulation (x86-64 only)";
     };
 
     register-integration = {

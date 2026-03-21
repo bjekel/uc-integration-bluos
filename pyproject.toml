@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "ucapi==0.5.2",
+    "ucapi @ git+https://github.com/albaintor/integration-python-library.git@media_browsing",
     "pyblu>=0.7.0",
     "pyee~=13.0.0",
     "zeroconf>=0.80.0",

@@ -134,6 +134,8 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self._player = player
         self._last_attributes: dict[str, Any] = {}
         self._last_search_key: str | None = None
+        # Maps browseKey → playURL for items that are both browsable and playable
+        self._play_url_cache: dict[str, str] = {}
 
     @property
     def player(self) -> BluOSPlayer:
@@ -273,6 +275,10 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         # Use browseKey as media_id for browsable items, playURL for play-only items
         if browse_key:
             media_id = browse_key
+            # When an item can both be browsed AND played, cache its play URL so that
+            # PLAY_MEDIA can resolve the correct endpoint (browseKey ≠ a play URL).
+            if play_url:
+                self._play_url_cache[browse_key] = play_url
         elif play_url:
             media_id = play_url
         else:
@@ -519,7 +525,10 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             case Commands.PLAY_MEDIA:
                 media_id = params.get("media_id")
                 if media_id:
-                    result = await self._player.play_browse_item(media_id)
+                    # Browsable items (albums, playlists) use their browseKey as media_id
+                    # for navigation, but need a different URL to actually play.
+                    play_url = self._play_url_cache.get(media_id, media_id)
+                    result = await self._player.play_browse_item(play_url)
                 else:
                     result = False
 

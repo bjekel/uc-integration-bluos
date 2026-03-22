@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from enum import StrEnum
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import aiohttp
 from config import BluOSDevice
@@ -945,14 +945,16 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            # Build URL manually: browse keys often contain '?', '&', etc. which must
-            # not be percent-encoded again when passed as a query-param value.
             url = f"{self._player.base_url}/Browse"
-            if key:
-                url = f"{url}?key={key}"
+            # Unquote the key first to normalize any pre-encoded sequences (yarl
+            # would otherwise decode %2F/%3F before sending, producing malformed URLs
+            # like "key=foo//bar?baz"), then let aiohttp params properly re-encode.
+            params = {"key": unquote(key)} if key else None
 
-            _LOG.debug("Browse request: %s", url)
-            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            _LOG.debug("Browse request: %s key=%s", url, params.get("key") if params else None)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
                 response.raise_for_status()
                 xml_text = await response.text()
                 _LOG.debug("Browse response length: %d", len(xml_text))

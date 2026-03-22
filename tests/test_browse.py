@@ -231,10 +231,8 @@ class TestBluOSPlayerBrowse:
         complex_key = "/Albums?service=Tidal&genre=0&category=toplist"
         await player.browse(key=complex_key)
 
-        called_url = mock_session.get.call_args[0][0]
-        assert "%3F" not in called_url, "Key '?' must not be percent-encoded"
-        assert "%26" not in called_url, "Key '&' must not be percent-encoded"
-        assert f"?key={complex_key}" in called_url
+        call_kwargs = mock_session.get.call_args.kwargs
+        assert call_kwargs["params"] == {"key": complex_key}, "Key must be passed as a params dict"
 
     async def test_search_not_available(self, player):
         """Test search when player is not available."""
@@ -509,11 +507,13 @@ class TestBluOSMediaPlayerBrowse:
         media_player._player.search.assert_called_once_with(search_key="Tidal:Search", query="test")
 
     async def test_search_no_key(self, media_player):
-        """Test search with no search key returns BAD_REQUEST."""
+        """Test search with no search key and no discoverable service returns empty results."""
         media_player._last_search_key = None
+        media_player._find_search_key = AsyncMock(return_value=None)
         options = SearchOptions(query="test")
         result = await media_player.search(options)
-        assert result == StatusCodes.BAD_REQUEST
+        assert isinstance(result, SearchResults)
+        assert result.media == []
 
     async def test_command_play_media(self, media_player):
         """Test PLAY_MEDIA command with a direct play URL."""

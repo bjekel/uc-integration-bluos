@@ -13,6 +13,7 @@ from config import BluOSDevice
 from pyblu import Input, Player, Preset, Status, SyncStatus
 from pyblu.errors import PlayerError, PlayerUnreachableError
 from pyee.asyncio import AsyncIOEventEmitter
+from yarl import URL as YarlURL
 
 _LOG = logging.getLogger(__name__)
 
@@ -979,11 +980,13 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            # search_key must not be re-encoded; user query is encoded normally.
-            url = f"{self._player.base_url}/Browse?key={search_key}&q={quote(query)}"
+            url = f"{self._player.base_url}/Browse"
+            params = {"key": unquote(search_key), "q": query}
 
-            _LOG.debug("Search request: %s", url)
-            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            _LOG.debug("Search request: %s key=%s q=%s", url, params["key"], query)
+            async with self._player._session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
                 response.raise_for_status()
                 xml_text = await response.text()
                 return self._parse_browse_xml(xml_text)
@@ -1003,7 +1006,9 @@ class BluOSPlayer:
             return False
 
         try:
-            # playURL is typically a relative URI like /Play?url=...
+            # playURL is typically a relative URI like /Play?url=... with an already-encoded
+            # query string. Use YarlURL(..., encoded=True) to prevent yarl from normalizing
+            # (decoding) the percent-encoded characters inside the URL parameters.
             if play_url.startswith(("http://", "https://")):
                 full_url = play_url
             else:
@@ -1011,7 +1016,9 @@ class BluOSPlayer:
                 full_url = f"{base}{play_url}" if play_url.startswith("/") else f"{base}/{play_url}"
 
             _LOG.debug("Playing browse item: %s", full_url)
-            async with self._player._session.get(full_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            async with self._player._session.get(
+                YarlURL(full_url, encoded=True), timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
                 response.raise_for_status()
             self._schedule_poll()
             return True

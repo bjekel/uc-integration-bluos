@@ -347,15 +347,33 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             pagination=Pagination(page=1, limit=len(items), count=len(items)),
         )
 
+    async def _find_search_key(self) -> str | None:
+        """Auto-discover a search key by browsing into available services."""
+        root = await self._player.browse(key=None)
+        if "error" in root:
+            return None
+        for item in root.get("items", []):
+            browse_key = item.get("browse_key")
+            if not browse_key:
+                continue
+            service_result = await self._player.browse(key=browse_key)
+            if search_key := service_result.get("search_key"):
+                _LOG.debug("Auto-discovered search key from '%s': %s", item.get("text"), search_key)
+                return search_key
+        return None
+
     async def search(self, options: SearchOptions) -> SearchResults | StatusCodes:
         """Search BluOS music content."""
         _LOG.debug("Search request: query=%s, media_id=%s", options.query, options.media_id)
 
-        # Use provided media_id as search_key, or fall back to last known search_key
-        search_key = options.media_id or getattr(self, "_last_search_key", None)
+        # Use provided media_id as search_key, fall back to last known, or auto-discover
+        search_key = options.media_id or self._last_search_key
         if not search_key:
-            _LOG.warning("No search key available. Browse a music service first.")
-            return StatusCodes.BAD_REQUEST
+            _LOG.debug("No search key cached, auto-discovering from available services")
+            search_key = await self._find_search_key()
+        if not search_key:
+            _LOG.warning("No search key available — no searchable services found")
+            return SearchResults(media=[], pagination=Pagination(page=1, limit=0, count=0))
 
         raw = await self._player.search(search_key=search_key, query=options.query)
 

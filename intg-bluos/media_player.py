@@ -1,5 +1,6 @@
 """UC Media Player entity for BluOS devices."""
 
+import hashlib
 import logging
 from typing import Any
 
@@ -136,6 +137,8 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self._last_search_key: str | None = None
         # Maps browseKey → playURL for items that are both browsable and playable
         self._play_url_cache: dict[str, str] = {}
+        # Maps short hash ID → full browse key for keys that exceed the 255-char media_id limit
+        self._browse_id_cache: dict[str, str] = {}
 
     @property
     def player(self) -> BluOSPlayer:
@@ -263,6 +266,14 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         }
         return repeat_map.get(bluos_repeat, RepeatMode.OFF)
 
+    def _media_id_for_browse_key(self, browse_key: str) -> str:
+        """Return a media_id for a browse key, shortening it if it exceeds 255 chars."""
+        if len(browse_key) <= 255:
+            return browse_key
+        short_id = "_bk_" + hashlib.sha256(browse_key.encode()).hexdigest()[:16]
+        self._browse_id_cache[short_id] = browse_key
+        return short_id
+
     def _bluos_item_to_browse_item(self, item: dict[str, Any]) -> BrowseMediaItem:
         """Convert a BluOS browse item dict to a UC BrowseMediaItem."""
         bluos_type = item.get("type", "link")
@@ -274,7 +285,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
         # Use browseKey as media_id for browsable items, playURL for play-only items
         if browse_key:
-            media_id = browse_key
+            media_id = self._media_id_for_browse_key(browse_key)
             # When an item can both be browsed AND played, cache its play URL so that
             # PLAY_MEDIA can resolve the correct endpoint (browseKey ≠ a play URL).
             if play_url:
@@ -307,7 +318,8 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         """Browse BluOS music content."""
         _LOG.debug("Browse request: media_id=%s, paging=%s", options.media_id, options.paging)
 
-        raw = await self._player.browse(key=options.media_id)
+        browse_key = self._browse_id_cache.get(options.media_id, options.media_id)
+        raw = await self._player.browse(key=browse_key)
 
         if "error" in raw and raw["error"]:
             _LOG.warning("Browse error: %s", raw["error"])
@@ -525,9 +537,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             case Commands.PLAY_MEDIA:
                 media_id = params.get("media_id")
                 if media_id:
+                    # Resolve any short hash ID back to the full browse key first
+                    resolved_id = self._browse_id_cache.get(media_id, media_id)
                     # Browsable items (albums, playlists) use their browseKey as media_id
                     # for navigation, but need a different URL to actually play.
-                    play_url = self._play_url_cache.get(media_id, media_id)
+                    play_url = self._play_url_cache.get(resolved_id, resolved_id)
                     result = await self._player.play_browse_item(play_url)
                 else:
                     result = False

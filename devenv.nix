@@ -14,7 +14,7 @@ in
       enable = true;
       requirements = ''
         # Runtime dependencies
-        ucapi==0.5.1
+        ucapi==0.5.2
         pyblu>=0.7.0
         pyee~=13.0.0
         zeroconf>=0.80.0

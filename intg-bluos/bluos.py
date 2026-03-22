@@ -945,15 +945,14 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
+            # Build URL manually: browse keys often contain '?', '&', etc. which must
+            # not be percent-encoded again when passed as a query-param value.
             url = f"{self._player.base_url}/Browse"
-            params: dict[str, str] = {}
             if key:
-                params["key"] = key
+                url = f"{url}?key={key}"
 
-            _LOG.debug("Browse request: %s params=%s", url, params)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
+            _LOG.debug("Browse request: %s", url)
+            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 response.raise_for_status()
                 xml_text = await response.text()
                 _LOG.debug("Browse response length: %d", len(xml_text))
@@ -978,13 +977,11 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            url = f"{self._player.base_url}/Browse"
-            params = {"key": search_key, "q": query}
+            # search_key must not be re-encoded; user query is encoded normally.
+            url = f"{self._player.base_url}/Browse?key={search_key}&q={quote(query)}"
 
-            _LOG.debug("Search request: %s params=%s", url, params)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
+            _LOG.debug("Search request: %s", url)
+            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 response.raise_for_status()
                 xml_text = await response.text()
                 return self._parse_browse_xml(xml_text)

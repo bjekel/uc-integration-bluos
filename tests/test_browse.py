@@ -214,6 +214,28 @@ class TestBluOSPlayerBrowse:
         assert result["service_name"] == "TIDAL"
         assert result["search_key"] == "Tidal:Search"
 
+    async def test_browse_complex_key_not_encoded(self, player):
+        """Test that browse keys containing '?' and '&' are NOT percent-encoded."""
+        player._available = True
+        mock_session = MagicMock()
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.text = AsyncMock(return_value=ALBUMS_BROWSE_XML)
+        mock_session.get = MagicMock(
+            return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock())
+        )
+        player._player = MagicMock()
+        player._player.base_url = "http://192.168.1.100:11000"
+        player._player._session = mock_session
+
+        complex_key = "/Albums?service=Tidal&genre=0&category=toplist"
+        await player.browse(key=complex_key)
+
+        called_url = mock_session.get.call_args[0][0]
+        assert "%3F" not in called_url, "Key '?' must not be percent-encoded"
+        assert "%26" not in called_url, "Key '&' must not be percent-encoded"
+        assert f"?key={complex_key}" in called_url
+
     async def test_search_not_available(self, player):
         """Test search when player is not available."""
         result = await player.search("Tidal:Search", "test")
@@ -494,13 +516,27 @@ class TestBluOSMediaPlayerBrowse:
         assert result == StatusCodes.BAD_REQUEST
 
     async def test_command_play_media(self, media_player):
-        """Test PLAY_MEDIA command."""
+        """Test PLAY_MEDIA command with a direct play URL."""
         media_player._player.play_browse_item = AsyncMock(return_value=True)
         import ucapi
 
         result = await media_player.command("play_media", {"media_id": "/Add?service=Tidal&albumid=123"})
         assert result == ucapi.StatusCodes.OK
         media_player._player.play_browse_item.assert_called_once_with("/Add?service=Tidal&albumid=123")
+
+    async def test_command_play_media_via_browse_key_cache(self, media_player):
+        """Test PLAY_MEDIA resolves play URL from cache when media_id is a browseKey."""
+        import ucapi
+
+        # Simulate browsing an album, which populates the cache
+        media_player._play_url_cache["Tidal:Album?albumid=123"] = "/Add?service=Tidal&albumid=123&playnow=1"
+
+        media_player._player.play_browse_item = AsyncMock(return_value=True)
+        result = await media_player.command("play_media", {"media_id": "Tidal:Album?albumid=123"})
+
+        assert result == ucapi.StatusCodes.OK
+        # Must use the cached play URL, not the browseKey
+        media_player._player.play_browse_item.assert_called_once_with("/Add?service=Tidal&albumid=123&playnow=1")
 
     async def test_command_clear_playlist(self, media_player):
         """Test CLEAR_PLAYLIST command."""
@@ -534,6 +570,8 @@ class TestBluOSMediaPlayerBrowse:
         # media_id should be browseKey when both are present
         assert result.media_id == "Tidal:Album?albumid=123"
         assert result.thumbnail is not None
+        # Play URL should be cached for PLAY_MEDIA resolution
+        assert media_player._play_url_cache.get("Tidal:Album?albumid=123") == "/Add?service=Tidal&albumid=123&playnow=1"
 
     def test_bluos_item_to_browse_item_audio_only(self, media_player):
         """Test converting an audio-only item (no browseKey)."""

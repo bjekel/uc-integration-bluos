@@ -170,6 +170,42 @@ class BluOSPlayer:
         """Check if player is connected and available for commands."""
         return self._player is not None and self._available
 
+    async def _raw_get(self, path: str, params: dict[str, str] | None = None, timeout: float = 10) -> str:
+        """
+        Send a GET request to {base_url}{path} and return the response body.
+
+        This is the single point of contact with pyblu's private attributes
+        (_session, base_url). If pyblu's internals change, only this method
+        and _raw_get_play_url need updating.
+
+        Raises:
+            aiohttp.ClientError: On network or HTTP error.
+        """
+        url = f"{self._player.base_url}{path}"
+        async with self._player._session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            resp.raise_for_status()
+            return await resp.text()
+
+    async def _raw_get_play_url(self, play_url: str, timeout: float = 10) -> None:
+        """
+        Resolve and GET a BluOS playURL (may be relative or absolute).
+
+        The URL is treated as already-encoded to avoid yarl re-encoding
+        percent-escaped characters in the query string.
+
+        Raises:
+            aiohttp.ClientError: On network or HTTP error.
+        """
+        if play_url.startswith(("http://", "https://")):
+            full_url = play_url
+        else:
+            base = self._player.base_url
+            full_url = f"{base}{play_url}" if play_url.startswith("/") else f"{base}/{play_url}"
+        async with self._player._session.get(
+            YarlURL(full_url, encoded=True), timeout=aiohttp.ClientTimeout(total=timeout)
+        ) as resp:
+            resp.raise_for_status()
+
     async def _volume_worker(self) -> None:
         """Process volume commands from queue sequentially, collapsing rapid changes."""
         while True:
@@ -611,12 +647,7 @@ class BluOSPlayer:
         try:
             # Work around pyblu bug: it sends 'shuffle' param but BluOS API expects 'state'
             # See: https://github.com/superfell/BluShepherd/blob/master/api.md
-            params = {"state": "1" if enabled else "0"}
-            url = f"{self._player.base_url}/Shuffle"
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                response.raise_for_status()
+            await self._raw_get("/Shuffle", params={"state": "1" if enabled else "0"})
             self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
@@ -796,15 +827,10 @@ class BluOSPlayer:
                 RepeatMode.ONE: "1",
                 RepeatMode.OFF: "2",
             }
-            params = {"state": state_map[mode]}
-            url = f"{self._player.base_url}/Repeat"
-            _LOG.debug("Setting repeat mode to %s: %s", mode, url)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                response.raise_for_status()
-                self._repeat_mode = mode
-                _LOG.debug("Repeat mode set to %s", mode)
+            _LOG.debug("Setting repeat mode to %s", mode)
+            await self._raw_get("/Repeat", params={"state": state_map[mode]})
+            self._repeat_mode = mode
+            _LOG.debug("Repeat mode set to %s", mode)
             self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
@@ -830,14 +856,9 @@ class BluOSPlayer:
         if not self._is_available():
             return False
         try:
-            params = {"seek": str(position)}
-            url = f"{self._player.base_url}/Play"
-            _LOG.debug("Seeking to position %d: %s", position, url)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                response.raise_for_status()
-                _LOG.debug("Seek to %d succeeded", position)
+            _LOG.debug("Seeking to position %d", position)
+            await self._raw_get("/Play", params={"seek": str(position)})
+            _LOG.debug("Seek to %d succeeded", position)
             self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
@@ -950,20 +971,14 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            url = f"{self._player.base_url}/Browse"
             # Unquote the key first to normalize any pre-encoded sequences (yarl
             # would otherwise decode %2F/%3F before sending, producing malformed URLs
             # like "key=foo//bar?baz"), then let aiohttp params properly re-encode.
             params = {"key": unquote(key)} if key else None
-
-            _LOG.debug("Browse request: %s key=%s", url, params.get("key") if params else None)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                response.raise_for_status()
-                xml_text = await response.text()
-                _LOG.debug("Browse response length: %d", len(xml_text))
-                return self._parse_browse_xml(xml_text)
+            _LOG.debug("Browse request: /Browse key=%s", params.get("key") if params else None)
+            xml_text = await self._raw_get("/Browse", params=params, timeout=15)
+            _LOG.debug("Browse response length: %d", len(xml_text))
+            return self._parse_browse_xml(xml_text)
 
         except (aiohttp.ClientError, ET.ParseError) as e:
             _LOG.error("Browse failed: %s", e)
@@ -984,16 +999,10 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            url = f"{self._player.base_url}/Browse"
             params = {"key": unquote(search_key), "q": query}
-
-            _LOG.debug("Search request: %s key=%s q=%s", url, params["key"], query)
-            async with self._player._session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                response.raise_for_status()
-                xml_text = await response.text()
-                return self._parse_browse_xml(xml_text)
+            _LOG.debug("Search request: /Browse key=%s q=%s", params["key"], query)
+            xml_text = await self._raw_get("/Browse", params=params, timeout=15)
+            return self._parse_browse_xml(xml_text)
 
         except (aiohttp.ClientError, ET.ParseError) as e:
             _LOG.error("Search failed: %s", e)
@@ -1011,19 +1020,10 @@ class BluOSPlayer:
 
         try:
             # playURL is typically a relative URI like /Play?url=... with an already-encoded
-            # query string. Use YarlURL(..., encoded=True) to prevent yarl from normalizing
-            # (decoding) the percent-encoded characters inside the URL parameters.
-            if play_url.startswith(("http://", "https://")):
-                full_url = play_url
-            else:
-                base = self._player.base_url
-                full_url = f"{base}{play_url}" if play_url.startswith("/") else f"{base}/{play_url}"
-
-            _LOG.debug("Playing browse item: %s", full_url)
-            async with self._player._session.get(
-                YarlURL(full_url, encoded=True), timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                response.raise_for_status()
+            # query string. _raw_get_play_url handles both relative and absolute URLs and
+            # prevents yarl from re-encoding percent-encoded characters.
+            _LOG.debug("Playing browse item: %s", play_url)
+            await self._raw_get_play_url(play_url)
             self._schedule_poll()
             return True
         except (aiohttp.ClientError, PlayerError) as e:
@@ -1036,9 +1036,7 @@ class BluOSPlayer:
             return False
 
         try:
-            url = f"{self._player.base_url}/Clear"
-            async with self._player._session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                response.raise_for_status()
+            await self._raw_get("/Clear")
             self._schedule_poll()
             return True
         except (aiohttp.ClientError, PlayerError) as e:

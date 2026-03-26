@@ -381,7 +381,7 @@ class BluOSPlayer:
             _LOG.error("Error polling %s: %s", self._device.name, e)
             return None
 
-    def _get_absolute_image_url(self, image: str | None) -> str:
+    def get_absolute_image_url(self, image: str | None) -> str:
         """Convert relative image URL to absolute URL."""
         if not image:
             return ""
@@ -392,7 +392,7 @@ class BluOSPlayer:
 
     def _status_to_attributes(self, status: Status) -> dict[str, Any]:
         """Convert pyblu Status to UC attributes."""
-        image_url = self._get_absolute_image_url(status.image)
+        image_url = self.get_absolute_image_url(status.image)
         # Update sleep timer from status
         self._sleep_timer = status.sleep or 0
 

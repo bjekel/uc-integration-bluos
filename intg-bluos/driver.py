@@ -36,6 +36,10 @@ _entities: dict[str, BluOSMediaPlayer] = {}
 _select_entities: dict[str, BluOSPresetSelect] = {}
 _devices: Devices | None = None
 
+# Reverse maps for O(1) entity-id → device-id lookup in command handler and subscribe handler.
+_entity_id_to_device_id: dict[str, str] = {}
+_select_entity_id_to_device_id: dict[str, str] = {}
+
 # Remote state
 _REMOTE_IN_STANDBY = False
 
@@ -100,6 +104,7 @@ async def _add_player(device: BluOSDevice) -> None:
     # Create media player entity
     entity = BluOSMediaPlayer(device, player)
     _entities[device.id] = entity
+    _entity_id_to_device_id[entity.id] = device.id
 
     # Register entity with API
     if api.available_entities.contains(entity.id):
@@ -111,6 +116,7 @@ async def _add_player(device: BluOSDevice) -> None:
     # Create select entity for presets (options may be empty until player connects)
     select_entity = BluOSPresetSelect(device, player)
     _select_entities[device.id] = select_entity
+    _select_entity_id_to_device_id[select_entity.id] = device.id
 
     # Register select entity with API
     if api.available_entities.contains(select_entity.id):
@@ -132,6 +138,7 @@ async def _remove_player(device_id: str) -> None:
 
     if device_id in _entities:
         entity = _entities.pop(device_id)
+        _entity_id_to_device_id.pop(entity.id, None)
         if api.available_entities.contains(entity.id):
             api.available_entities.remove(entity.id)
         if api.configured_entities.contains(entity.id):
@@ -139,6 +146,7 @@ async def _remove_player(device_id: str) -> None:
 
     if device_id in _select_entities:
         select_entity = _select_entities.pop(device_id)
+        _select_entity_id_to_device_id.pop(select_entity.id, None)
         if api.available_entities.contains(select_entity.id):
             api.available_entities.remove(select_entity.id)
         if api.configured_entities.contains(select_entity.id):
@@ -410,31 +418,27 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
     _LOG.info("Subscribed to entities: %s", entity_ids)
 
     for entity_id in entity_ids:
-        # Check if it's a media player entity
-        for device_id, entity in _entities.items():
-            if entity.id == entity_id:
-                if device_id in _configured_players:
-                    player = _configured_players[device_id]
-                    if not player.available:
-                        await player.connect()
-                    else:
-                        await player.poll_status(use_etag=False)
-                break
+        # O(1) lookup via reverse maps populated when entities are registered
+        if device_id := _entity_id_to_device_id.get(entity_id):
+            if device_id in _configured_players:
+                player = _configured_players[device_id]
+                if not player.available:
+                    await player.connect()
+                else:
+                    await player.poll_status(use_etag=False)
+            continue
 
-        # Check if it's a select entity - send current state immediately
-        for device_id, select_entity in _select_entities.items():
-            if select_entity.id == entity_id:
-                if device_id in _configured_players:
-                    player = _configured_players[device_id]
-                    if player.available and player.presets:
-                        # Player connected with presets - send current options
-                        changed = select_entity.refresh_options()
-                        if changed:
-                            api.configured_entities.update_attributes(select_entity.id, changed)
-                        else:
-                            # Even if no change, send current attributes to ensure UC has them
-                            api.configured_entities.update_attributes(select_entity.id, select_entity.attributes)
-                break
+        if device_id := _select_entity_id_to_device_id.get(entity_id):
+            select_entity = _select_entities[device_id]
+            if device_id in _configured_players:
+                player = _configured_players[device_id]
+                if player.available and player.presets:
+                    changed = select_entity.refresh_options()
+                    if changed:
+                        api.configured_entities.update_attributes(select_entity.id, changed)
+                    else:
+                        # Even if no change, send current attributes to ensure UC has them
+                        api.configured_entities.update_attributes(select_entity.id, select_entity.attributes)
 
 
 @api.listens_to(ucapi.Events.UNSUBSCRIBE_ENTITIES)
@@ -477,15 +481,12 @@ async def _entity_command_handler(
     """Handle entity commands."""
     _LOG.debug("Command %s for %s (type: %s)", cmd_id, entity_id, entity_type)
 
-    # Find the media player entity
-    for entity in _entities.values():
-        if entity.id == entity_id:
-            return await entity.command(cmd_id, params)
+    # O(1) lookup via reverse maps populated when entities are registered
+    if device_id := _entity_id_to_device_id.get(entity_id):
+        return await _entities[device_id].command(cmd_id, params)
 
-    # Find the select entity
-    for select_entity in _select_entities.values():
-        if select_entity.id == entity_id:
-            return await select_entity.command(cmd_id, params)
+    if device_id := _select_entity_id_to_device_id.get(entity_id):
+        return await _select_entities[device_id].command(cmd_id, params)
 
     _LOG.warning("Entity not found: %s", entity_id)
     return ucapi.StatusCodes.NOT_FOUND

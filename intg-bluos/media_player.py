@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+from collections import OrderedDict
 from typing import Any
 
 import ucapi
@@ -92,6 +93,25 @@ _BLUOS_TYPE_TO_CONTENT_TYPE = {
 # Seek step for fast forward/rewind in seconds
 SEEK_STEP = 10
 
+# Maximum entries in browse-related caches. Prevents unbounded memory growth
+# when browsing large libraries on the embedded Remote hardware.
+_BROWSE_CACHE_MAX = 500
+
+
+class _LRUCache(OrderedDict):
+    """OrderedDict-based LRU cache with a fixed maximum size."""
+
+    def __init__(self, maxsize: int):
+        super().__init__()
+        self._maxsize = maxsize
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self._maxsize:
+            self.popitem(last=False)
+
 
 class BluOSMediaPlayer(ucapi.MediaPlayer):
     """Media player entity for BluOS devices."""
@@ -142,9 +162,9 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self._last_attributes: dict[str, Any] = {}
         self._last_search_key: str | None = None
         # Maps browseKey → playURL for items that are both browsable and playable
-        self._play_url_cache: dict[str, str] = {}
+        self._play_url_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
         # Maps short hash ID → full browse key for keys that exceed the 255-char media_id limit
-        self._browse_id_cache: dict[str, str] = {}
+        self._browse_id_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
 
     @property
     def player(self) -> BluOSPlayer:
@@ -301,7 +321,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         else:
             media_id = item.get("text", "")
 
-        thumbnail = self._player._get_absolute_image_url(item.get("image")) if item.get("image") else None
+        thumbnail = self._player.get_absolute_image_url(item.get("image")) if item.get("image") else None
 
         # Convert nested items (categories)
         sub_items = None

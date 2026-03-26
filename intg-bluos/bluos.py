@@ -99,6 +99,10 @@ class BluOSPlayer:
         self._last_volume_update: tuple[int, float] | None = None  # (volume, timestamp)
         self._volume_debounce_ms: int = 100
 
+        # Last known device state — avoids extra status() calls in commands
+        self._last_known_volume: int | None = None
+        self._last_known_mute: bool | None = None
+
         # Pre-mute volume storage - stores volume before mute to restore when unmuting
         self._volume_before_mute: int | None = None
 
@@ -157,15 +161,31 @@ class BluOSPlayer:
         """Name of currently selected preset, or None if not playing a preset."""
         return self._current_preset_name
 
+    @property
+    def is_reconnecting(self) -> bool:
+        """Whether a reconnect attempt is currently scheduled or in progress."""
+        return self._reconnect_task is not None and not self._reconnect_task.done()
+
     def _is_available(self) -> bool:
         """Check if player is connected and available for commands."""
         return self._player is not None and self._available
 
     async def _volume_worker(self) -> None:
-        """Process volume commands from queue sequentially."""
+        """Process volume commands from queue sequentially, collapsing rapid changes."""
         while True:
             volume = await self._volume_queue.get()
             if volume is None:  # Shutdown signal
+                break
+            # Drain any intermediate values queued while we were waiting — only
+            # the most recent target matters for the device.
+            while not self._volume_queue.empty():
+                next_val = self._volume_queue.get_nowait()
+                self._volume_queue.task_done()
+                if next_val is None:  # Shutdown signal in drain
+                    volume = None
+                    break
+                volume = next_val
+            if volume is None:
                 break
             try:
                 await self._player.volume(level=volume)
@@ -376,6 +396,12 @@ class BluOSPlayer:
         # Update sleep timer from status
         self._sleep_timer = status.sleep or 0
 
+        # Cache raw device values so commands can use them without an extra status() call
+        if status.volume is not None:
+            self._last_known_volume = status.volume
+        if status.mute is not None:
+            self._last_known_mute = status.mute
+
         # Volume debouncing - use target if recently set to prevent UI jitter
         volume = status.volume
         if self._target_volume is not None:
@@ -520,39 +546,25 @@ class BluOSPlayer:
         """Increase volume by configured step."""
         if not self._is_available():
             return False
-        try:
-            # Use target volume if set, otherwise get current from device
-            current = self._target_volume
-            if current is None:
-                status = await self._player.status()
-                current = status.volume or 0
-            new_level = min(100, current + self._device.volume_step)
-            self._target_volume = new_level
-            await self._volume_queue.put(new_level)
-            self._schedule_poll()
-            return True
-        except PlayerError as e:
-            _LOG.error("Volume up failed: %s", e)
-            return False
+        # Prefer pending target; fall back to last known device volume
+        current = self._target_volume if self._target_volume is not None else (self._last_known_volume or 0)
+        new_level = min(100, current + self._device.volume_step)
+        self._target_volume = new_level
+        await self._volume_queue.put(new_level)
+        self._schedule_poll()
+        return True
 
     async def volume_down(self) -> bool:
         """Decrease volume by configured step."""
         if not self._is_available():
             return False
-        try:
-            # Use target volume if set, otherwise get current from device
-            current = self._target_volume
-            if current is None:
-                status = await self._player.status()
-                current = status.volume or 0
-            new_level = max(0, current - self._device.volume_step)
-            self._target_volume = new_level
-            await self._volume_queue.put(new_level)
-            self._schedule_poll()
-            return True
-        except PlayerError as e:
-            _LOG.error("Volume down failed: %s", e)
-            return False
+        # Prefer pending target; fall back to last known device volume
+        current = self._target_volume if self._target_volume is not None else (self._last_known_volume or 0)
+        new_level = max(0, current - self._device.volume_step)
+        self._target_volume = new_level
+        await self._volume_queue.put(new_level)
+        self._schedule_poll()
+        return True
 
     async def mute(self, muted: bool) -> bool:
         """
@@ -564,14 +576,10 @@ class BluOSPlayer:
         if not self._is_available():
             return False
 
-        # Store volume before muting
+        # Store volume before muting using last known value (avoids an extra status() call)
         if muted and self._volume_before_mute is None:
-            try:
-                status = await self._player.status()
-                if status.volume and status.volume > 0:
-                    self._volume_before_mute = status.volume
-            except PlayerError:
-                pass
+            if self._last_known_volume and self._last_known_volume > 0:
+                self._volume_before_mute = self._last_known_volume
 
         # Clear stored volume when unmuting
         if not muted:
@@ -586,13 +594,9 @@ class BluOSPlayer:
         """Toggle mute state."""
         if not self._is_available():
             return False
-        try:
-            status = await self._player.status()
-            new_mute = not status.mute
-            return await self.mute(new_mute)
-        except PlayerError as e:
-            _LOG.error("Toggle mute failed: %s", e)
-            return False
+        # Prefer pending target state; fall back to last known device state
+        current_mute = self._target_mute if self._target_mute is not None else (self._last_known_mute or False)
+        return await self.mute(not current_mute)
 
     async def set_shuffle(self, enabled: bool) -> bool:
         """

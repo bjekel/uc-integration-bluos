@@ -391,7 +391,13 @@ class BluOSPlayer:
 
         try:
             etag = self._last_etag if use_etag else None
-            poll_timeout = self._device.standby_timeout
+            # Use a shorter timeout when actively playing/paused so state changes
+            # (track change, pause) are reflected sooner. Fall back to the longer
+            # standby_timeout when the player is idle/stopped.
+            active_states = {States.PLAYING, States.PAUSED, States.BUFFERING}
+            poll_timeout = (
+                self._device.active_poll_timeout if self._state in active_states else self._device.standby_timeout
+            )
             status = await self._player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
             self._last_etag = status.etag
 

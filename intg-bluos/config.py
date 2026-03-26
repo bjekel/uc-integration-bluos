@@ -21,6 +21,7 @@ class BluOSDevice:
     volume_step: int = 5
     timeout: float = 5.0
     standby_timeout: int = 60
+    active_poll_timeout: int = 30
     model: str | None = None
 
     def to_dict(self) -> dict:
@@ -38,6 +39,7 @@ class BluOSDevice:
             volume_step=data.get("volume_step", 5),
             timeout=data.get("timeout", 5.0),
             standby_timeout=data.get("standby_timeout", 60),
+            active_poll_timeout=data.get("active_poll_timeout", 30),
             model=data.get("model"),
         )
 

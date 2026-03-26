@@ -9,16 +9,22 @@ from bluos import BluOSPlayer
 from bluos import RepeatMode as BluOSRepeatMode
 from bluos import States as BluOSStates
 from config import BluOSDevice
-from ucapi.api_definitions import (
+from ucapi.api_definitions import StatusCodes
+from ucapi.media_player import (
+    Attributes,
     BrowseMediaItem,
     BrowseOptions,
     BrowseResults,
+    Commands,
+    DeviceClasses,
+    Features,
+    Options,
     Pagination,
+    RepeatMode,
     SearchOptions,
     SearchResults,
-    StatusCodes,
+    States,
 )
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, RepeatMode, States
 
 _LOG = logging.getLogger(__name__)
 
@@ -337,7 +343,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             title=service_name,
             media_class="directory",
             media_type="music",
-            media_id=options.media_id or "",
+            media_id=options.media_id or "root",
             can_browse=True,
             items=items,
         )

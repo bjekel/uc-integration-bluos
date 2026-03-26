@@ -162,6 +162,11 @@ def _on_player_connected(device_id: str) -> None:
         _LOG.debug("Player %s available: %s", pid, player.available)
     # Update integration device state
     _LOOP.create_task(_update_device_state())
+
+    if _REMOTE_IN_STANDBY:
+        _LOG.debug("Remote in standby, skipping entity updates on player connect")
+        return
+
     if device_id in _entities:
         entity = _entities[device_id]
         # Update simple commands with current presets
@@ -199,6 +204,11 @@ def _on_player_disconnected(device_id: str) -> None:
     _LOG.info("Player disconnected: %s", device_id)
     # Update integration device state
     _LOOP.create_task(_update_device_state())
+
+    if _REMOTE_IN_STANDBY:
+        _LOG.debug("Remote in standby, skipping entity updates on player disconnect")
+        return
+
     if device_id in _entities:
         entity = _entities[device_id]
         changed = entity.set_unavailable()
@@ -215,6 +225,9 @@ def _on_player_disconnected(device_id: str) -> None:
 
 def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
     """Handle player update event."""
+    if _REMOTE_IN_STANDBY:
+        return
+
     if device_id in _entities:
         entity = _entities[device_id]
         changed = entity.update_attributes(attributes)

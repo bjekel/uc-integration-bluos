@@ -20,8 +20,7 @@ from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
 
-# Polling intervals (in seconds)
-STANDBY_POLL_INTERVAL = 10
+# Polling interval when no players are configured (in seconds)
 NO_PLAYERS_POLL_INTERVAL = 5
 
 # Event loop
@@ -39,6 +38,11 @@ _devices: Devices | None = None
 
 # Remote state
 _REMOTE_IN_STANDBY = False
+
+# Event that is set while the remote is active and cleared during standby.
+# The status poller waits on this instead of sleep-looping, so it consumes
+# no CPU cycles while the remote is in standby.
+_poller_active = asyncio.Event()
 
 
 def _get_driver_path() -> str:
@@ -285,9 +289,8 @@ async def _reconnect_player(device_id: str, player: BluOSPlayer) -> None:
 async def _status_poller() -> None:
     """Background task to poll player status using long-polling."""
     while True:
-        if _REMOTE_IN_STANDBY:
-            await asyncio.sleep(STANDBY_POLL_INTERVAL)
-            continue
+        # Suspend completely during standby — no CPU wake-ups until the remote wakes up.
+        await _poller_active.wait()
 
         if not _configured_players:
             await asyncio.sleep(NO_PLAYERS_POLL_INTERVAL)
@@ -297,8 +300,12 @@ async def _status_poller() -> None:
         available_players = [
             (device_id, player) for device_id, player in list(_configured_players.items()) if player.available
         ]
+        # Only attempt reconnect for players that don't already have a reconnect task running,
+        # to avoid racing with the exponential-backoff reconnect scheduled inside BluOSPlayer.
         unavailable_players = [
-            (device_id, player) for device_id, player in list(_configured_players.items()) if not player.available
+            (device_id, player)
+            for device_id, player in list(_configured_players.items())
+            if not player.available and not player.is_reconnecting
         ]
 
         # Poll all available players in parallel
@@ -310,7 +317,7 @@ async def _status_poller() -> None:
             )
             polled_any = any(r is True for r in results)
 
-        # Attempt to reconnect unavailable players in parallel
+        # Attempt to reconnect unavailable players that have no active reconnect task
         if unavailable_players:
             await asyncio.gather(
                 *[_reconnect_player(device_id, player) for device_id, player in unavailable_players],
@@ -355,6 +362,7 @@ async def _on_enter_standby() -> None:
     global _REMOTE_IN_STANDBY
     _LOG.info("UC Remote entering standby")
     _REMOTE_IN_STANDBY = True
+    _poller_active.clear()  # Suspend the status poller completely during standby
     # Report disconnected state during standby
     await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
@@ -365,6 +373,7 @@ async def _on_exit_standby() -> None:
     global _REMOTE_IN_STANDBY
     _LOG.info("UC Remote exiting standby")
     _REMOTE_IN_STANDBY = False
+    _poller_active.set()  # Resume the status poller
 
     # Set connecting state if we have players to reconnect
     players_to_connect = [p for p in _configured_players.values() if not p.available]
@@ -504,6 +513,7 @@ async def _main() -> None:
 
     _configure_logging()
     _LOG.info("Starting BluOS integration")
+    _poller_active.set()  # Start in active state
 
     # Get configuration path
     config_home = os.getenv("UC_CONFIG_HOME", os.path.join(os.getcwd(), "data"))

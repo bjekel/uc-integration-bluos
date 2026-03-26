@@ -946,6 +946,8 @@ class TestBluOSPlayer:
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
+            # Seed _last_known_volume via an initial poll (mirrors real usage)
+            await player.poll_status(use_etag=False)
             result = await player.volume_up()
             # Wait for volume worker to process the queue
             await player._volume_queue.join()
@@ -982,6 +984,8 @@ class TestBluOSPlayer:
 
         with patch("bluos.Player", return_value=mock_pyblu_player):
             await player.connect()
+            # Seed _last_known_volume via an initial poll (mirrors real usage)
+            await player.poll_status(use_etag=False)
             result = await player.volume_down()
             # Wait for volume worker to process the queue
             await player._volume_queue.join()

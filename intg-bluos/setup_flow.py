@@ -489,6 +489,21 @@ def _show_device_configure() -> SetupAction:
                     }
                 },
             },
+            {
+                "id": "active_poll_timeout",
+                "label": {
+                    "en": "Active Poll Timeout (seconds)",
+                    "de": "Aktiv-Poll-Timeout (Sekunden)",
+                },
+                "field": {
+                    "number": {
+                        "value": 30,
+                        "min": 10,
+                        "max": 120,
+                        "steps": 5,
+                    }
+                },
+            },
         ],
     )
 
@@ -513,6 +528,10 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
         standby_timeout = int(msg.input_values.get("standby_timeout", 60))
     except (ValueError, TypeError):
         standby_timeout = 60
+    try:
+        active_poll_timeout = int(msg.input_values.get("active_poll_timeout", 30))
+    except (ValueError, TypeError):
+        active_poll_timeout = 30
 
     # Create device configuration
     # Use MAC if available, otherwise generate from IP
@@ -526,6 +545,7 @@ async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
         volume_step=volume_step,
         timeout=timeout,
         standby_timeout=standby_timeout,
+        active_poll_timeout=active_poll_timeout,
         model=_selected_device.model,
     )
 

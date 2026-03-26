@@ -7,7 +7,8 @@ import pytest
 from bluos import BluOSPlayer
 from config import BluOSDevice
 from media_player import BluOSMediaPlayer
-from ucapi.api_definitions import BrowseOptions, BrowseResults, Pagination, SearchOptions, SearchResults, StatusCodes
+from ucapi.api_definitions import StatusCodes
+from ucapi.media_player import BrowseOptions, BrowseResults, Pagination, SearchOptions, SearchResults
 
 # Sample XML responses from BluOS API
 

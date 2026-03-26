@@ -12,13 +12,7 @@ in
     version = "3.11";
     venv = {
       enable = true;
-      requirements = ''
-        # Runtime dependencies
-        ucapi==0.5.2
-        pyblu>=0.7.0
-        pyee~=13.0.0
-        zeroconf>=0.80.0
-        aiohttp>=3.9.0
+      requirements = (builtins.readFile ./requirements.txt) + ''
         # Dev dependencies
         pylint
         pytest

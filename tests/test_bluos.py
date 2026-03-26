@@ -511,6 +511,7 @@ class TestBluOSPlayer:
         # Mock the HTTP session for direct API call
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        mock_response.text = AsyncMock(return_value="")
 
         mock_context = MagicMock()
         mock_context.__aenter__ = AsyncMock(return_value=mock_response)
@@ -565,6 +566,7 @@ class TestBluOSPlayer:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        mock_response.text = AsyncMock(return_value="")
 
         mock_context = MagicMock()
         mock_context.__aenter__ = AsyncMock(return_value=mock_response)
@@ -617,6 +619,7 @@ class TestBluOSPlayer:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        mock_response.text = AsyncMock(return_value="")
 
         mock_context = MagicMock()
         mock_context.__aenter__ = AsyncMock(return_value=mock_response)

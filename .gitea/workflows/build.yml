@@ -124,9 +124,9 @@ jobs:
           sha256sum *.tar.gz > checksums.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: https://gitea.com/actions/release-action@main
         with:
-          files: |
+          files: |-
             artifacts/*.tar.gz
             artifacts/checksums.txt
-          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -26,6 +26,7 @@ in
   packages = with pkgs; [
     pkgs-unstable.claude-code
     git
+    openssh
     gnumake
     jq
     docker

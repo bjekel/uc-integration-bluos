@@ -124,9 +124,24 @@ jobs:
           sha256sum *.tar.gz > checksums.txt
 
       - name: Create release
-        uses: https://gitea.com/actions/release-action@main
-        with:
-          files: |-
-            artifacts/*.tar.gz
-            artifacts/checksums.txt
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
+
+          # Create release (or retrieve existing)
+          RELEASE=$(curl -sf -H "$AUTH" "${API}/releases/tags/${VERSION}" || true)
+          if [ -z "$RELEASE" ]; then
+            RELEASE=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
+              "${API}/releases" \
+              -d "{\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION}\"}")
+          fi
+          RELEASE_ID=$(echo "$RELEASE" | jq -r '.id')
+
+          # Upload artifacts
+          for FILE in artifacts/*.tar.gz artifacts/checksums.txt; do
+            curl -sf -X POST -H "$AUTH" \
+              -H "Content-Type: application/octet-stream" \
+              "${API}/releases/${RELEASE_ID}/assets?name=$(basename "$FILE")" \
+              --data-binary @"$FILE"
+          done

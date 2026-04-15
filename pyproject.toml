@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uc-intg-bluos"
-version = "0.13.0"
+version = "0.13.1"
 description = "BluOS integration for Unfolded Circle Remote"
 readme = "README.md"
 license = {text = "MPL-2.0"}
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "ucapi @ git+https://github.com/albaintor/integration-python-library.git@media_browsing",
+    "ucapi @ git+https://github.com/unfoldedcircle/integration-python-library.git@v0.6.0",
     "pyblu>=0.7.0",
     "pyee~=13.0.0",
     "zeroconf>=0.80.0",

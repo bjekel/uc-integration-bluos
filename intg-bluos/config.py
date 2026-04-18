@@ -203,6 +203,49 @@ class Devices:
                 self._remove_handler(device_id)
         self.store()
 
+    def export(self) -> str:
+        """
+        Export configuration as a JSON string.
+
+        Returns:
+            JSON string with all device configurations
+        """
+        data = {"devices": list(self._devices.values())}
+        return json.dumps(data, cls=_EnhancedJSONEncoder, indent=2)
+
+    def import_config(self, json_str: str) -> bool:
+        """
+        Import configuration from a JSON string.
+
+        Parses and validates all devices before touching the current state,
+        then replaces all existing devices with the imported ones.
+
+        Args:
+            json_str: JSON string in the same format as exported by export()
+
+        Returns:
+            True if import succeeded, False on parse/validation error
+        """
+        try:
+            data = json.loads(json_str)
+            new_devices = [BluOSDevice.from_dict(d) for d in data.get("devices", [])]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            _LOG.error("Invalid configuration format: %s", e)
+            return False
+
+        snapshot = dict(self._devices)
+        try:
+            self.clear()
+            for device in new_devices:
+                self.add_or_update(device)
+            _LOG.info("Imported %d device(s)", len(new_devices))
+            return True
+        except Exception as e:  # pylint: disable=broad-except
+            _LOG.error("Failed to apply imported configuration: %s", e)
+            self._devices = snapshot
+            self.store()
+            return False
+
     def __len__(self) -> int:
         """Return number of configured devices."""
         return len(self._devices)

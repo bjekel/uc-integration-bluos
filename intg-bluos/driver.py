@@ -527,6 +527,7 @@ async def _main() -> None:
         remove_handler=_on_device_removed,
     )
     _devices.load()
+    setup_flow.set_devices(_devices)
 
     # Register existing devices
     if _devices.all():

@@ -242,3 +242,85 @@ class TestDevices:
         ids = [d.id for d in devices]
         assert "test1" in ids
         assert "test2" in ids
+
+    def test_export_empty(self, devices):
+        """Test export with no devices produces valid JSON."""
+        result = devices.export()
+        data = json.loads(result)
+        assert data == {"devices": []}
+
+    def test_export_roundtrip(self, devices):
+        """Test that export followed by import_config restores identical devices."""
+        device1 = BluOSDevice(id="test1", name="Device 1", address="192.168.1.100", port=11000)
+        device2 = BluOSDevice(id="test2", name="Device 2", address="192.168.1.101", model="Node")
+        devices.add_or_update(device1)
+        devices.add_or_update(device2)
+
+        exported = devices.export()
+
+        fresh = Devices(devices.data_path)
+        assert fresh.import_config(exported) is True
+        assert len(fresh) == 2
+        assert fresh.contains("test1")
+        assert fresh.contains("test2")
+        assert fresh.get("test2").model == "Node"
+
+    def test_import_config_replaces_existing(self, temp_dir):
+        """Test that import_config replaces all existing devices and fires callbacks."""
+        add_handler = MagicMock()
+        remove_handler = MagicMock()
+        devices = Devices(temp_dir, add_handler=add_handler, remove_handler=remove_handler)
+
+        old_device = BluOSDevice(id="old", name="Old Device", address="10.0.0.1")
+        devices.add_or_update(old_device)
+        add_handler.reset_mock()
+
+        new_config = json.dumps(
+            {
+                "devices": [
+                    {"id": "new1", "name": "New Device 1", "address": "10.0.0.2"},
+                    {"id": "new2", "name": "New Device 2", "address": "10.0.0.3"},
+                ]
+            }
+        )
+
+        result = devices.import_config(new_config)
+
+        assert result is True
+        assert len(devices) == 2
+        assert not devices.contains("old")
+        assert devices.contains("new1")
+        assert devices.contains("new2")
+        remove_handler.assert_called_once_with("old")
+        assert add_handler.call_count == 2
+
+    def test_import_config_invalid_json(self, devices):
+        """Test that import_config returns False and leaves state unchanged on invalid JSON."""
+        device = BluOSDevice(id="test", name="Test Device", address="192.168.1.100")
+        devices.add_or_update(device)
+
+        result = devices.import_config("not valid json {{{")
+
+        assert result is False
+        assert len(devices) == 1
+        assert devices.contains("test")
+
+    def test_import_config_missing_required_field(self, devices):
+        """Test that import_config returns False when a device entry is missing a required field."""
+        device = BluOSDevice(id="existing", name="Existing", address="192.168.1.1")
+        devices.add_or_update(device)
+
+        bad_config = json.dumps(
+            {
+                "devices": [
+                    # Missing required "id" field
+                    {"name": "No ID Device", "address": "192.168.1.200"}
+                ]
+            }
+        )
+
+        result = devices.import_config(bad_config)
+
+        assert result is False
+        assert len(devices) == 1
+        assert devices.contains("existing")

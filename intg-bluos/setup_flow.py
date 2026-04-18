@@ -48,6 +48,7 @@ class SetupSteps(IntEnum):
     DISCOVER = 2
     DEVICE_CHOICE = 3
     DEVICE_CONFIGURE = 4
+    BACKUP_RESTORE = 5
 
 
 # Global setup state
@@ -55,6 +56,13 @@ _setup_step = SetupSteps.INIT
 _discovered_devices: list[DiscoveredDevice] = []
 _selected_device: DiscoveredDevice | None = None
 _configured_device: BluOSDevice | None = None
+_devices_ref = None  # set by driver.py via set_devices()
+
+
+def set_devices(devices) -> None:
+    """Set the Devices instance for backup/restore access."""
+    global _devices_ref
+    _devices_ref = devices
 
 
 def get_configured_device() -> BluOSDevice | None:
@@ -131,6 +139,8 @@ async def _handle_user_data(msg: UserDataResponse) -> SetupAction:
             return await _handle_device_choice(msg)
         case SetupSteps.DEVICE_CONFIGURE:
             return await _handle_device_configure(msg)
+        case SetupSteps.BACKUP_RESTORE:
+            return await _handle_backup_restore(msg)
         case _:
             _LOG.error("Unexpected setup step: %s", _setup_step)
             return SetupError()
@@ -153,6 +163,13 @@ def _show_configuration_mode() -> SetupAction:
                                 "label": {
                                     "en": "Add new device",
                                     "de": "Neues Gerät hinzufügen",
+                                },
+                            },
+                            {
+                                "id": "backup_restore",
+                                "label": {
+                                    "en": "Backup / Restore configuration",
+                                    "de": "Konfiguration sichern / wiederherstellen",
                                 },
                             },
                             {
@@ -180,9 +197,54 @@ async def _handle_configuration_mode(msg: UserDataResponse) -> SetupAction:
         # Return to let driver.py handle the reset
         return SetupComplete()
 
+    if action == "backup_restore":
+        _setup_step = SetupSteps.BACKUP_RESTORE
+        return _show_backup_restore_step()
+
     # Add new device - start discovery
     _setup_step = SetupSteps.DISCOVER
     return _show_discovery_options()
+
+
+def _show_backup_restore_step() -> SetupAction:
+    """Show backup/restore textarea pre-filled with current configuration JSON."""
+    current = _devices_ref.export() if _devices_ref else '{"devices": []}'
+    return RequestUserInput(
+        {"en": "Backup / Restore", "de": "Sichern / Wiederherstellen"},
+        [
+            {
+                "id": "config",
+                "label": {
+                    "en": "Devices configuration (copy to back up, paste to restore; "
+                    "all existing devices will be replaced)",
+                    "de": "Gerätekonfiguration (kopieren zum Sichern, einfügen zum "
+                    "Wiederherstellen; alle vorhandenen Geräte werden ersetzt)",
+                },
+                "field": {"textarea": {"value": current}},
+            }
+        ],
+    )
+
+
+async def _handle_backup_restore(msg: UserDataResponse) -> SetupAction:
+    """Apply configuration from backup/restore textarea."""
+    global _setup_step
+
+    json_str = msg.input_values.get("config", "").strip()
+    if not json_str:
+        return SetupError()
+
+    if _devices_ref is None:
+        _LOG.error("Devices not initialised during backup restore")
+        return SetupError()
+
+    if _devices_ref.import_config(json_str):
+        _LOG.info("Configuration restored successfully")
+        _setup_step = SetupSteps.INIT
+        return SetupComplete()
+
+    _LOG.warning("Failed to restore configuration")
+    return SetupError()
 
 
 def _show_discovery_options() -> SetupAction:

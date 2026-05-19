@@ -123,25 +123,28 @@ jobs:
           cd artifacts
           sha256sum *.tar.gz > checksums.txt
 
-      - name: Create release
+      - name: Create release and attach assets
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
           AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
 
-          # Create release (or retrieve existing)
-          RELEASE=$(curl -sf -H "$AUTH" "${API}/releases/tags/${VERSION}" || true)
-          if [ -z "$RELEASE" ]; then
-            RELEASE=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
-              "${API}/releases" \
-              -d "{\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION}\"}")
-          fi
-          RELEASE_ID=$(echo "$RELEASE" | jq -r '.id')
+          RELEASE_ID=$(curl -sf \
+            "https://git.ffz.one/api/v1/repos/${REPO}/releases/tags/${TAG}" \
+            -H "$AUTH" | jq -r '.id // empty')
 
-          # Upload artifacts
-          for FILE in artifacts/*.tar.gz artifacts/checksums.txt; do
-            curl -sf -X POST -H "$AUTH" \
-              -H "Content-Type: application/octet-stream" \
-              "${API}/releases/${RELEASE_ID}/assets?name=$(basename "$FILE")" \
-              --data-binary @"$FILE"
+          if [ -z "$RELEASE_ID" ]; then
+            echo "No existing release for ${TAG} — creating one."
+            RELEASE_ID=$(curl -sf -X POST \
+              "https://git.ffz.one/api/v1/repos/${REPO}/releases" \
+              -H "$AUTH" -H "Content-Type: application/json" \
+              -d "{\"tag_name\": \"${TAG}\", \"name\": \"${TAG}\"}" \
+              | jq -r '.id')
+          fi
+
+          echo "Uploading assets to release ${RELEASE_ID}"
+          for f in artifacts/*.tar.gz artifacts/checksums.txt; do
+            curl -sf -X POST \
+              "https://git.ffz.one/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets" \
+              -H "$AUTH" -F "attachment=@${f}"
           done

@@ -8,16 +8,21 @@ from bluos import BluOSPlayer
 from bluos import RepeatMode as BluOSRepeatMode
 from bluos import States as BluOSStates
 from config import BluOSDevice
-from ucapi.api_definitions import (
+from ucapi.api_definitions import Pagination, StatusCodes
+from ucapi.media_player import (
+    Attributes,
     BrowseMediaItem,
     BrowseOptions,
     BrowseResults,
-    Pagination,
+    Commands,
+    DeviceClasses,
+    Features,
+    Options,
+    RepeatMode,
     SearchOptions,
     SearchResults,
-    StatusCodes,
+    States,
 )
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, Options, RepeatMode, States
 
 _LOG = logging.getLogger(__name__)
 

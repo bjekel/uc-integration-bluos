@@ -45,7 +45,6 @@ in
   env = {
     UC_CONFIG_HOME = "${config.env.DEVENV_ROOT}/data";
     UC_LOG_LEVEL = "DEBUG";
-    PYTHONPATH = "${config.env.DEVENV_ROOT}/intg-bluos:${config.env.DEVENV_ROOT}";
     FORCE_COLOR = "1";
   };
 
@@ -228,6 +227,26 @@ in
       description = "Register integration with Unfolded Circle remote";
     };
   };
+
+  enterShell = ''
+    export PYTHONPATH="${config.env.DEVENV_ROOT}/intg-bluos:${config.env.DEVENV_ROOT}''${PYTHONPATH:+:$PYTHONPATH}"
+    echo ""
+    echo "uc-integration-bluos dev environment"
+    echo "────────────────────────────────────"
+    echo "  run                  Run the driver"
+    echo "  test                 Run pytest suite"
+    echo "  lint                 Check with pylint / black / isort"
+    echo "  format               Auto-format with black / isort"
+    echo "  build                PyInstaller build (host arch)"
+    echo "  package              Build + tar.gz (host arch)"
+    echo "  build-aarch64        PyInstaller build via Docker (aarch64)"
+    echo "  package-aarch64      Build + tar.gz (aarch64)"
+    echo "  clean                Remove dist / build artifacts"
+    echo "  setup-qemu           Enable aarch64 QEMU emulation (x86-64 only)"
+    echo "  register-integration      Register with local UC remote"
+    echo "  register-integration-remote  Register with remote UC remote"
+    echo ""
+  '';
 
   # Git hooks
   git-hooks.hooks = {

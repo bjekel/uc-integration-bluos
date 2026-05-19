@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [master]
-    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -50,9 +50,9 @@ jobs:
           fetch-depth: 0
 
       - name: Validate version
-        if: startsWith(gitea.ref, 'refs/tags/v')
+        if: startsWith(gitea.ref, 'refs/tags/')
         run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          TAG_VERSION=${GITHUB_REF#refs/tags/}
           DRIVER_VERSION=$(jq -r '.version' driver.json)
           if [ "$TAG_VERSION" != "$DRIVER_VERSION" ]; then
             echo "Version mismatch: tag=$TAG_VERSION, driver.json=$DRIVER_VERSION"
@@ -62,8 +62,8 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
           else
             VERSION=$(jq -r '.version' driver.json)-dev.${{ gitea.run_number }}
           fi
@@ -111,7 +111,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [build]
-    if: startsWith(gitea.ref, 'refs/tags/v')
+    if: startsWith(gitea.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v3
         with:
@@ -123,10 +123,30 @@ jobs:
           cd artifacts
           sha256sum *.tar.gz > checksums.txt
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/*.tar.gz
-            artifacts/checksums.txt
-          generate_release_notes: true
+      - name: Create release and attach assets
+        run: |
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+
+          RELEASE_ID=$(curl -sf \
+            "https://REDACTED.invalid/api/v1/repos/${REPO}/releases/tags/${TAG}" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            | jq -r '.id // empty')
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "No existing release found for ${TAG} — creating one."
+            RELEASE_ID=$(curl -sf -X POST \
+              "https://REDACTED.invalid/api/v1/repos/${REPO}/releases" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\": \"${TAG}\", \"name\": \"${TAG}\"}" \
+              | jq -r '.id')
+          fi
+
+          echo "Uploading assets to release ${RELEASE_ID}"
+          for f in artifacts/*.tar.gz artifacts/checksums.txt; do
+            curl -sf -X POST \
+              "https://REDACTED.invalid/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -F "attachment=@${f}"
+          done

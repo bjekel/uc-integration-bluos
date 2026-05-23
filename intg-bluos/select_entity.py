@@ -46,6 +46,19 @@ class BluOSPresetSelect(ucapi.Select):
         self._player = player
         self._last_current_option: str = ""
 
+    def _compute_state_and_options_changes(self) -> dict[str, Any]:
+        """Compute and apply state + options changes; return a dict of what changed."""
+        changed: dict[str, Any] = {}
+        new_state = States.ON if self._player.available else States.UNAVAILABLE
+        if self.attributes.get(Attributes.STATE) != new_state:
+            changed[Attributes.STATE] = new_state
+            self.attributes[Attributes.STATE] = new_state
+        options = [preset.name for preset in self._player.presets]
+        if self.attributes.get(Attributes.OPTIONS) != options:
+            changed[Attributes.OPTIONS] = options
+            self.attributes[Attributes.OPTIONS] = options
+        return changed
+
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
         Update entity attributes and return only changed ones.
@@ -56,20 +69,7 @@ class BluOSPresetSelect(ucapi.Select):
         Returns:
             Dictionary of changed attributes
         """
-        changed: dict[str, Any] = {}
-
-        # Update state based on player availability
-        player_available = self._player.available
-        new_state = States.ON if player_available else States.UNAVAILABLE
-        if self.attributes.get(Attributes.STATE) != new_state:
-            changed[Attributes.STATE] = new_state
-            self.attributes[Attributes.STATE] = new_state
-
-        # Update options from player presets
-        options = [preset.name for preset in self._player.presets]
-        if self.attributes.get(Attributes.OPTIONS) != options:
-            changed[Attributes.OPTIONS] = options
-            self.attributes[Attributes.OPTIONS] = options
+        changed = self._compute_state_and_options_changes()
 
         # Determine current option from tracked preset name
         current_preset = attributes.get("current_preset")
@@ -89,20 +89,7 @@ class BluOSPresetSelect(ucapi.Select):
         Returns:
             Dictionary of changed attributes
         """
-        changed: dict[str, Any] = {}
-
-        options = [preset.name for preset in self._player.presets]
-        if self.attributes.get(Attributes.OPTIONS) != options:
-            changed[Attributes.OPTIONS] = options
-            self.attributes[Attributes.OPTIONS] = options
-
-        # Update state
-        new_state = States.ON if self._player.available else States.UNAVAILABLE
-        if self.attributes.get(Attributes.STATE) != new_state:
-            changed[Attributes.STATE] = new_state
-            self.attributes[Attributes.STATE] = new_state
-
-        return changed
+        return self._compute_state_and_options_changes()
 
     def set_unavailable(self) -> dict[str, Any]:
         """

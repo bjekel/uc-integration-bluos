@@ -29,6 +29,23 @@ from ucapi.media_player import (
 
 _LOG = logging.getLogger(__name__)
 
+_UC_STATE_MAP: dict[BluOSStates, States] = {
+    BluOSStates.UNKNOWN: States.UNKNOWN,
+    BluOSStates.UNAVAILABLE: States.UNAVAILABLE,
+    BluOSStates.OFF: States.OFF,
+    BluOSStates.ON: States.ON,
+    BluOSStates.PLAYING: States.PLAYING,
+    BluOSStates.PAUSED: States.PAUSED,
+    BluOSStates.STOPPED: States.ON,
+    BluOSStates.BUFFERING: States.BUFFERING,
+}
+
+_UC_REPEAT_MAP: dict[BluOSRepeatMode, RepeatMode] = {
+    BluOSRepeatMode.OFF: RepeatMode.OFF,
+    BluOSRepeatMode.ALL: RepeatMode.ALL,
+    BluOSRepeatMode.ONE: RepeatMode.ONE,
+}
+
 # Features supported by BluOS players
 BLUOS_FEATURES = [
     Features.ON_OFF,
@@ -270,27 +287,12 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
     @staticmethod
     def _map_state(bluos_state: BluOSStates) -> States:
         """Map BluOS state to UC state."""
-        state_map = {
-            BluOSStates.UNKNOWN: States.UNKNOWN,
-            BluOSStates.UNAVAILABLE: States.UNAVAILABLE,
-            BluOSStates.OFF: States.OFF,
-            BluOSStates.ON: States.ON,
-            BluOSStates.PLAYING: States.PLAYING,
-            BluOSStates.PAUSED: States.PAUSED,
-            BluOSStates.STOPPED: States.ON,
-            BluOSStates.BUFFERING: States.BUFFERING,
-        }
-        return state_map.get(bluos_state, States.UNKNOWN)
+        return _UC_STATE_MAP.get(bluos_state, States.UNKNOWN)
 
     @staticmethod
     def _map_repeat_mode(bluos_repeat: BluOSRepeatMode) -> RepeatMode:
         """Map BluOS repeat mode to UC repeat mode."""
-        repeat_map = {
-            BluOSRepeatMode.OFF: RepeatMode.OFF,
-            BluOSRepeatMode.ALL: RepeatMode.ALL,
-            BluOSRepeatMode.ONE: RepeatMode.ONE,
-        }
-        return repeat_map.get(bluos_repeat, RepeatMode.OFF)
+        return _UC_REPEAT_MAP.get(bluos_repeat, RepeatMode.OFF)
 
     def _media_id_for_browse_key(self, browse_key: str) -> str:
         """Return a media_id for a browse key, shortening it if it exceeds 255 chars."""
@@ -321,7 +323,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         else:
             media_id = item.get("text", "")
 
-        thumbnail = self._player.get_absolute_image_url(item.get("image")) if item.get("image") else None
+        thumbnail = self._player.get_absolute_image_url(item.get("image")) or None
 
         # Convert nested items (categories)
         sub_items = None
@@ -477,13 +479,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 # BluOS has no power control, stop playback instead
                 result = await self._player.stop()
 
-            case Commands.TOGGLE:
-                if self._last_attributes.get(Attributes.STATE) == States.PLAYING:
-                    result = await self._player.pause()
-                else:
-                    result = await self._player.play()
-
-            case Commands.PLAY_PAUSE:
+            case Commands.TOGGLE | Commands.PLAY_PAUSE:
                 if self._last_attributes.get(Attributes.STATE) == States.PLAYING:
                     result = await self._player.pause()
                 else:
@@ -503,13 +499,14 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.FAST_FORWARD:
-                # Seek forward by SEEK_STEP seconds
                 current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
                 duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
-                new_pos = min(current_pos + SEEK_STEP, duration) if duration else current_pos + SEEK_STEP
-                result = await self._player.seek(int(new_pos))
-                # Clear position cache to force update on next poll
-                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                if duration:
+                    new_pos = min(current_pos + SEEK_STEP, duration)
+                    result = await self._player.seek(int(new_pos))
+                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                else:
+                    result = True  # no-op for streams with unknown duration
 
             case Commands.REWIND:
                 # Seek backward by SEEK_STEP seconds
@@ -523,8 +520,6 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 volume = params.get("volume")
                 if volume is not None:
                     result = await self._player.set_volume(int(volume))
-                else:
-                    result = False
 
             case Commands.VOLUME_UP:
                 result = await self._player.volume_up()
@@ -568,15 +563,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                     result = await self._player.seek(int(position))
                     # Clear position cache to force update on next poll
                     self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
-                else:
-                    result = False
 
             case Commands.SELECT_SOURCE:
                 source = params.get("source")
                 if source:
                     result = await self._player.select_source(source)
-                else:
-                    result = False
 
             case Commands.PLAY_MEDIA:
                 media_id = params.get("media_id")

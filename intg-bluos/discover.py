@@ -1,8 +1,8 @@
 """mDNS discovery for BluOS devices."""
 
 import asyncio
+import ipaddress
 import logging
-import socket
 from dataclasses import dataclass
 
 from zeroconf import ServiceStateChange, Zeroconf
@@ -106,17 +106,10 @@ class BluOSDiscovery:
             return
 
         # Prefer IPv4 addresses
-        host = None
-        for addr in addresses:
-            try:
-                socket.inet_aton(addr)  # Check if IPv4
-                host = addr
-                break
-            except socket.error:
-                continue
-
-        if not host:
-            host = addresses[0]
+        host = next(
+            (addr for addr in addresses if isinstance(ipaddress.ip_address(addr), ipaddress.IPv4Address)),
+            addresses[0],
+        )
 
         port = info.port or DEFAULT_PORT
 

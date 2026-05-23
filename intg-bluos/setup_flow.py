@@ -380,10 +380,12 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
     if retry:
         if retry == "yes":
             return await _start_discovery()
-        elif retry == "manual":
+        if retry == "manual":
             return _show_manual_entry()
-        else:  # "no" - cancel
+        if retry == "no":
             return SetupComplete()
+        _LOG.warning("Unexpected retry value: %s", retry)
+        return SetupError()
 
     # Check if this is a manual entry response
     manual_address = msg.input_values.get("manual_address", "").strip()

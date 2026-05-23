@@ -44,15 +44,6 @@ class BluOSDevice:
         )
 
 
-class _EnhancedJSONEncoder(json.JSONEncoder):
-    """JSON encoder that handles dataclasses."""
-
-    def default(self, o):
-        if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
-        return super().default(o)
-
-
 class Devices:
     """Manager for configured BluOS devices."""
 
@@ -88,10 +79,6 @@ class Devices:
         Returns:
             True if configuration was loaded, False if file doesn't exist
         """
-        if not os.path.exists(self._config_file):
-            _LOG.debug("No configuration file found at %s", self._config_file)
-            return False
-
         try:
             with open(self._config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -102,6 +89,9 @@ class Devices:
 
             _LOG.info("Loaded %d devices from configuration", len(self._devices))
             return True
+        except FileNotFoundError:
+            _LOG.debug("No configuration file found at %s", self._config_file)
+            return False
         except (json.JSONDecodeError, KeyError) as e:
             _LOG.error("Failed to load configuration: %s", e)
             return False
@@ -115,9 +105,9 @@ class Devices:
         """
         try:
             os.makedirs(self._data_path, exist_ok=True)
-            data = {"devices": list(self._devices.values())}
+            data = {"devices": [d.to_dict() for d in self._devices.values()]}
             with open(self._config_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, cls=_EnhancedJSONEncoder, indent=2)
+                json.dump(data, f, indent=2)
             _LOG.debug("Configuration saved to %s", self._config_file)
             return True
         except OSError as e:
@@ -180,10 +170,7 @@ class Devices:
         Returns:
             Device configuration or None if not found
         """
-        device = self._devices.get(device_id)
-        if device:
-            return BluOSDevice(**dataclasses.asdict(device))
-        return None
+        return self._devices.get(device_id)
 
     def all(self) -> list[BluOSDevice]:
         """Get all configured devices."""
@@ -210,8 +197,8 @@ class Devices:
         Returns:
             JSON string with all device configurations
         """
-        data = {"devices": list(self._devices.values())}
-        return json.dumps(data, cls=_EnhancedJSONEncoder, indent=2)
+        data = {"devices": [d.to_dict() for d in self._devices.values()]}
+        return json.dumps(data, indent=2)
 
     def import_config(self, json_str: str) -> bool:
         """

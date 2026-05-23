@@ -40,7 +40,7 @@ in
   env = {
     UC_CONFIG_HOME = "${config.env.DEVENV_ROOT}/data";
     UC_LOG_LEVEL = "DEBUG";
-    PYTHONPATH = "${config.env.DEVENV_ROOT}/intg-bluos:${config.env.DEVENV_ROOT}";
+    PYTHONPATH = lib.mkForce "${config.env.DEVENV_ROOT}/intg-bluos:${config.env.DEVENV_ROOT}";
     FORCE_COLOR = "1";
   };
 

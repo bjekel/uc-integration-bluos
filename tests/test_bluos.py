@@ -191,7 +191,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.play()
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.play.assert_called_once()
@@ -228,7 +228,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.pause()
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.pause.assert_called_once()
@@ -265,7 +265,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.stop()
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.stop.assert_called_once()
@@ -485,7 +485,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.set_shuffle(True)
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player._session.get.assert_called_once()
@@ -541,7 +541,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.set_repeat(RepeatMode.ALL)
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             assert player.repeat_mode == RepeatMode.ALL
@@ -649,7 +649,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.seek(120)
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             call_args = mock_pyblu_player._session.get.call_args
@@ -690,7 +690,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.toggle_sleep_timer()
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result == 15
             assert player.sleep_timer == 15
@@ -781,7 +781,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.select_source("My Radio")
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(1)
@@ -824,7 +824,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.select_source("preset:2")
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(2)
@@ -868,7 +868,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.select_source("hdmi1")
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.play_url.assert_called_once_with(mock_input.url)
@@ -911,7 +911,7 @@ class TestBluOSPlayer:
             await player.connect()
             result = await player.load_preset_by_command("PRESET_3")
             # Allow scheduled poll task to run
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.2)
 
             assert result is True
             mock_pyblu_player.load_preset.assert_called_once_with(3)

@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from enum import StrEnum
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 import aiohttp
 from config import BluOSDevice
@@ -58,6 +58,27 @@ class RepeatMode(StrEnum):
     ONE = "ONE"
 
 
+_BLUOS_STATE_MAP: dict[str, States] = {
+    "play": States.PLAYING,
+    "stream": States.PLAYING,
+    "pause": States.PAUSED,
+    "stop": States.ON,
+    "connecting": States.BUFFERING,
+}
+
+_REPEAT_API_MAP: dict[RepeatMode, str] = {
+    RepeatMode.ALL: "0",
+    RepeatMode.ONE: "1",
+    RepeatMode.OFF: "2",
+}
+
+_REPEAT_NEXT_MAP: dict[RepeatMode, RepeatMode] = {
+    RepeatMode.OFF: RepeatMode.ALL,
+    RepeatMode.ALL: RepeatMode.ONE,
+    RepeatMode.ONE: RepeatMode.OFF,
+}
+
+
 class BluOSPlayer:
     """Wrapper for pyblu Player with event emission and connection management."""
 
@@ -96,15 +117,18 @@ class BluOSPlayer:
         self._target_mute: bool | None = None
 
         # Volume debouncing - prevents UI jitter by ignoring duplicate updates
-        self._last_volume_update: tuple[int, float] | None = None  # (volume, timestamp)
+        self._last_volume_update: float | None = None  # timestamp of last volume update
         self._volume_debounce_ms: int = 100
 
         # Last known device state — avoids extra status() calls in commands
         self._last_known_volume: int | None = None
         self._last_known_mute: bool | None = None
 
-        # Pre-mute volume storage - stores volume before mute to restore when unmuting
-        self._volume_before_mute: int | None = None
+        # Source list cache — invalidated when inputs/presets are reloaded
+        self._source_list_cache: list[str] | None = None
+
+        # Pending poll task — used to coalesce rapid _schedule_poll calls
+        self._pending_poll_task: asyncio.Task | None = None
 
     @property
     def id(self) -> str:
@@ -376,6 +400,8 @@ class BluOSPlayer:
             _LOG.warning("Failed to load presets: %s", e)
             self._presets = []
 
+        self._source_list_cache = None
+
     async def poll_status(self, use_etag: bool = True) -> dict[str, Any] | None:
         """
         Poll for status updates using long-polling.
@@ -402,7 +428,7 @@ class BluOSPlayer:
             self._last_etag = status.etag
 
             attributes = self._status_to_attributes(status)
-            new_state = self._map_state(status.state)
+            new_state = attributes["state"]
 
             if new_state != self._state:
                 self._state = new_state
@@ -448,11 +474,10 @@ class BluOSPlayer:
         volume = status.volume
         if self._target_volume is not None:
             now = time.time()
-            if self._last_volume_update:
-                _, last_time = self._last_volume_update
-                if (now - last_time) * 1000 < self._volume_debounce_ms:
+            if self._last_volume_update is not None:
+                if (now - self._last_volume_update) * 1000 < self._volume_debounce_ms:
                     volume = self._target_volume
-            self._last_volume_update = (volume if volume is not None else 0, now)
+            self._last_volume_update = now
             # Clear target if device caught up
             if status.volume == self._target_volume:
                 self._target_volume = None
@@ -486,22 +511,20 @@ class BluOSPlayer:
         """Map BluOS state to UC state."""
         if not bluos_state:
             return States.UNKNOWN
-
-        state_map = {
-            "play": States.PLAYING,
-            "stream": States.PLAYING,
-            "pause": States.PAUSED,
-            "stop": States.ON,
-            "connecting": States.BUFFERING,
-        }
-        return state_map.get(bluos_state.lower(), States.ON)
+        return _BLUOS_STATE_MAP.get(bluos_state.lower(), States.ON)
 
     # Playback control methods
 
     def _schedule_poll(self) -> None:
-        """Schedule a non-blocking status poll after command execution."""
-        task = asyncio.create_task(self.poll_status(use_etag=False))
-        task.add_done_callback(self._poll_task_done)
+        """Schedule a debounced status poll; cancels any pending poll from rapid commands."""
+        if self._pending_poll_task and not self._pending_poll_task.done():
+            self._pending_poll_task.cancel()
+        self._pending_poll_task = asyncio.create_task(self._debounced_poll())
+        self._pending_poll_task.add_done_callback(self._poll_task_done)
+
+    async def _debounced_poll(self) -> None:
+        await asyncio.sleep(0.15)
+        await self.poll_status(use_etag=False)
 
     @staticmethod
     def _poll_task_done(task: asyncio.Task) -> None:
@@ -584,29 +607,23 @@ class BluOSPlayer:
         self._schedule_poll()
         return True
 
-    async def volume_up(self) -> bool:
-        """Increase volume by configured step."""
+    async def _adjust_volume(self, delta: int) -> bool:
         if not self._is_available():
             return False
-        # Prefer pending target; fall back to last known device volume
         current = self._target_volume if self._target_volume is not None else (self._last_known_volume or 0)
-        new_level = min(100, current + self._device.volume_step)
+        new_level = max(0, min(100, current + delta))
         self._target_volume = new_level
         await self._volume_queue.put(new_level)
         self._schedule_poll()
         return True
 
+    async def volume_up(self) -> bool:
+        """Increase volume by configured step."""
+        return await self._adjust_volume(self._device.volume_step)
+
     async def volume_down(self) -> bool:
         """Decrease volume by configured step."""
-        if not self._is_available():
-            return False
-        # Prefer pending target; fall back to last known device volume
-        current = self._target_volume if self._target_volume is not None else (self._last_known_volume or 0)
-        new_level = max(0, current - self._device.volume_step)
-        self._target_volume = new_level
-        await self._volume_queue.put(new_level)
-        self._schedule_poll()
-        return True
+        return await self._adjust_volume(-self._device.volume_step)
 
     async def mute(self, muted: bool) -> bool:
         """
@@ -617,16 +634,6 @@ class BluOSPlayer:
         """
         if not self._is_available():
             return False
-
-        # Store volume before muting using last known value (avoids an extra status() call)
-        if muted and self._volume_before_mute is None:
-            if self._last_known_volume and self._last_known_volume > 0:
-                self._volume_before_mute = self._last_known_volume
-
-        # Clear stored volume when unmuting
-        if not muted:
-            self._volume_before_mute = None
-
         self._target_mute = muted
         await self._mute_queue.put(muted)
         self._schedule_poll()
@@ -737,17 +744,11 @@ class BluOSPlayer:
 
     def get_source_list(self) -> list[str]:
         """Get list of available sources (inputs + presets)."""
-        sources = []
-
-        # Add inputs
-        for inp in self._inputs:
-            sources.append(inp.id or inp.text)
-
-        # Add presets with display names
-        for preset in self._presets:
-            sources.append(preset.name)
-
-        return sources
+        if self._source_list_cache is None:
+            self._source_list_cache = [inp.id or inp.text for inp in self._inputs] + [
+                preset.name for preset in self._presets
+            ]
+        return self._source_list_cache
 
     def get_simple_commands(self) -> list[str]:
         """Get list of simple commands for presets and utilities."""
@@ -765,6 +766,7 @@ class BluOSPlayer:
 
         try:
             self._presets = await self._player.presets()
+            self._source_list_cache = None
             _LOG.info("Refreshed %d presets for %s", len(self._presets), self._device.name)
             return True
         except PlayerError as e:
@@ -827,14 +829,7 @@ class BluOSPlayer:
         if not self._is_available():
             return False
         try:
-            # BluOS API: state=0 (repeat all), state=1 (repeat one), state=2 (off)
-            state_map = {
-                RepeatMode.ALL: "0",
-                RepeatMode.ONE: "1",
-                RepeatMode.OFF: "2",
-            }
-            _LOG.debug("Setting repeat mode to %s", mode)
-            await self._raw_get("/Repeat", params={"state": state_map[mode]})
+            await self._raw_get("/Repeat", params={"state": _REPEAT_API_MAP[mode]})
             self._repeat_mode = mode
             _LOG.debug("Repeat mode set to %s", mode)
             self._schedule_poll()
@@ -845,12 +840,7 @@ class BluOSPlayer:
 
     async def toggle_repeat(self) -> bool:
         """Toggle repeat mode: OFF -> ALL -> ONE -> OFF."""
-        next_mode = {
-            RepeatMode.OFF: RepeatMode.ALL,
-            RepeatMode.ALL: RepeatMode.ONE,
-            RepeatMode.ONE: RepeatMode.OFF,
-        }
-        return await self.set_repeat(next_mode[self._repeat_mode])
+        return await self.set_repeat(_REPEAT_NEXT_MAP[self._repeat_mode])
 
     async def seek(self, position: int) -> bool:
         """
@@ -862,9 +852,8 @@ class BluOSPlayer:
         if not self._is_available():
             return False
         try:
-            _LOG.debug("Seeking to position %d", position)
             await self._raw_get("/Play", params={"seek": str(position)})
-            _LOG.debug("Seek to %d succeeded", position)
+            _LOG.debug("Seeked to position %d", position)
             self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:

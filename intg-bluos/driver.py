@@ -172,12 +172,12 @@ def _on_player_connected(device_id: str) -> None:
     if _LOG.isEnabledFor(logging.DEBUG):
         for pid, player in _configured_players.items():
             _LOG.debug("Player %s available: %s", pid, player.available)
-    # Update integration device state
-    _LOOP.create_task(_update_device_state())
 
     if _REMOTE_IN_STANDBY:
         _LOG.debug("Remote in standby, skipping entity updates on player connect")
         return
+
+    _LOOP.create_task(_update_device_state())
 
     if device_id in _entities:
         entity = _entities[device_id]
@@ -214,12 +214,12 @@ def _on_player_connected(device_id: str) -> None:
 def _on_player_disconnected(device_id: str) -> None:
     """Handle player disconnected event."""
     _LOG.info("Player disconnected: %s", device_id)
-    # Update integration device state
-    _LOOP.create_task(_update_device_state())
 
     if _REMOTE_IN_STANDBY:
         _LOG.debug("Remote in standby, skipping entity updates on player disconnect")
         return
+
+    _LOOP.create_task(_update_device_state())
 
     if device_id in _entities:
         entity = _entities[device_id]
@@ -372,7 +372,8 @@ async def _on_enter_standby() -> None:
     _LOG.info("UC Remote entering standby")
     _REMOTE_IN_STANDBY = True
     _poller_active.clear()  # Suspend the status poller completely during standby
-    # Report disconnected state during standby
+    for player in _configured_players.values():
+        player.cancel_reconnect()
     await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
 

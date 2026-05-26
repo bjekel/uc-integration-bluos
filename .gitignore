@@ -74,3 +74,6 @@ devenv.lock
 # Project specific
 data/
 config.json
+
+# QEMU core dumps from aarch64 cross-compilation builds
+*.core

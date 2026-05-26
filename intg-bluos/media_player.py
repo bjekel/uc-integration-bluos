@@ -46,6 +46,12 @@ _UC_REPEAT_MAP: dict[BluOSRepeatMode, RepeatMode] = {
     BluOSRepeatMode.ONE: RepeatMode.ONE,
 }
 
+_REPEAT_COMMAND_MAP: dict[RepeatMode, BluOSRepeatMode] = {
+    RepeatMode.OFF: BluOSRepeatMode.OFF,
+    RepeatMode.ALL: BluOSRepeatMode.ALL,
+    RepeatMode.ONE: BluOSRepeatMode.ONE,
+}
+
 # Features supported by BluOS players
 BLUOS_FEATURES = [
     Features.ON_OFF,
@@ -509,12 +515,14 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                     result = True  # no-op for streams with unknown duration
 
             case Commands.REWIND:
-                # Seek backward by SEEK_STEP seconds
                 current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
-                new_pos = max(current_pos - SEEK_STEP, 0)
-                result = await self._player.seek(int(new_pos))
-                # Clear position cache to force update on next poll
-                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
+                if duration:
+                    new_pos = max(current_pos - SEEK_STEP, 0)
+                    result = await self._player.seek(int(new_pos))
+                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                else:
+                    result = True  # no-op for streams with unknown duration
 
             case Commands.VOLUME:
                 volume = params.get("volume")
@@ -542,19 +550,8 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 result = await self._player.set_shuffle(bool(shuffle))
 
             case Commands.REPEAT:
-                # Set repeat mode from parameter
                 repeat_param = params.get("repeat", "OFF")
-                # Map UC RepeatMode to BluOS RepeatMode
-                mode_map = {
-                    RepeatMode.OFF: BluOSRepeatMode.OFF,
-                    RepeatMode.ALL: BluOSRepeatMode.ALL,
-                    RepeatMode.ONE: BluOSRepeatMode.ONE,
-                    # Also accept string values
-                    "OFF": BluOSRepeatMode.OFF,
-                    "ALL": BluOSRepeatMode.ALL,
-                    "ONE": BluOSRepeatMode.ONE,
-                }
-                bluos_mode = mode_map.get(repeat_param, BluOSRepeatMode.OFF)
+                bluos_mode = _REPEAT_COMMAND_MAP.get(repeat_param, BluOSRepeatMode.OFF)
                 result = await self._player.set_repeat(bluos_mode)
 
             case Commands.SEEK:

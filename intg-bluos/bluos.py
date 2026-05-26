@@ -473,14 +473,13 @@ class BluOSPlayer:
         # Volume debouncing - use target if recently set to prevent UI jitter
         volume = status.volume
         if self._target_volume is not None:
-            now = time.time()
             if self._last_volume_update is not None:
-                if (now - self._last_volume_update) * 1000 < self._volume_debounce_ms:
+                if (time.time() - self._last_volume_update) * 1000 < self._volume_debounce_ms:
                     volume = self._target_volume
-            self._last_volume_update = now
             # Clear target if device caught up
             if status.volume == self._target_volume:
                 self._target_volume = None
+                self._last_volume_update = None
 
         # Mute state tracking - use target if set
         muted = status.mute
@@ -603,6 +602,7 @@ class BluOSPlayer:
             return False
         level = max(0, min(100, level))
         self._target_volume = level
+        self._last_volume_update = time.time()
         await self._volume_queue.put(level)
         self._schedule_poll()
         return True
@@ -613,6 +613,7 @@ class BluOSPlayer:
         current = self._target_volume if self._target_volume is not None else (self._last_known_volume or 0)
         new_level = max(0, min(100, current + delta))
         self._target_volume = new_level
+        self._last_volume_update = time.time()
         await self._volume_queue.put(new_level)
         self._schedule_poll()
         return True

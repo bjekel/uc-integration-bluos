@@ -381,6 +381,13 @@ class BluOSPlayer:
 
         self._reconnect_task = self._loop.create_task(reconnect())
 
+    def cancel_reconnect(self) -> None:
+        """Cancel any pending reconnect task and reset the backoff delay."""
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
+        self._reconnect_delay = MIN_RECONNECT_DELAY
+
     async def _load_sources(self) -> None:
         """Load available inputs and presets."""
         if not self._player:

@@ -414,6 +414,9 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
         if device_id := _entity_id_to_device_id.get(entity_id):
             if device_id in _configured_players:
                 player = _configured_players[device_id]
+                # Clear cached state so the next poll pushes all attributes to the remote,
+                # even if the entity was polled before this subscription (e.g. during setup).
+                _entities[device_id].clear_cached_attributes()
                 if not player.available:
                     await player.connect()
                 else:

@@ -87,6 +87,7 @@ jobs:
           COPY . .
           RUN pyinstaller --clean --onedir \
             --name driver \
+            --paths intg-bluos \
             --add-data 'driver.json:.' \
             intg-bluos/driver.py
           FROM scratch

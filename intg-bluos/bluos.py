@@ -321,6 +321,13 @@ class BluOSPlayer:
             self._schedule_reconnect()
             return False
 
+        except Exception as e:
+            _LOG.error("Unexpected error connecting to %s: %s", self._device.name, e)
+            self._available = False
+            self._events.emit(Events.DISCONNECTED)
+            self._schedule_reconnect()
+            return False
+
         finally:
             # Always reset _connecting, even if the task was cancelled mid-connect.
             # Without this, cancel_reconnect() during an in-progress connect() leaves

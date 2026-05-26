@@ -146,6 +146,23 @@ class TestBluOSPlayer:
             assert len(disconnected_received) == 1
 
     @pytest.mark.asyncio
+    async def test_connect_unexpected_error(self, player):
+        """Test connection when an unexpected exception escapes pyblu's error wrappers."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock(side_effect=RuntimeError("unexpected"))
+
+        disconnected_received = []
+        player.events.on(Events.DISCONNECTED, lambda: disconnected_received.append(True))
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            result = await player.connect()
+
+            assert result is False
+            assert player.available is False
+            assert len(disconnected_received) == 1
+            assert player._connecting is False
+
+    @pytest.mark.asyncio
     async def test_disconnect(self, player):
         """Test disconnection."""
         mock_pyblu_player = MagicMock()

@@ -78,7 +78,7 @@ jobs:
       - name: Build with PyInstaller (aarch64)
         run: |
           docker buildx build --platform linux/arm64 \
-            --output type=local,dest=. \
+            --output type=local,dest=./dist \
             -f - . <<'DOCKERFILE'
           FROM docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYINSTALLER_TAG }} AS build
           WORKDIR /src
@@ -86,17 +86,19 @@ jobs:
           RUN pip install -r requirements.txt
           COPY . .
           RUN pyinstaller --clean --onedir \
-            --name intg-${{ env.INTG_NAME }} \
+            --name driver \
             --add-data 'driver.json:.' \
             intg-bluos/driver.py
           FROM scratch
-          COPY --from=build /src/dist/ /
+          COPY --from=build /src/dist/driver/ /
           DOCKERFILE
 
       - name: Package artifact
         run: |
           mkdir -p artifacts
-          cd intg-${{ env.INTG_NAME }}
+          cd dist
+          mkdir -p bin
+          mv driver _internal bin/
           cp ../driver.json .
           cp ../LICENSE .
           echo "${{ steps.version.outputs.version }}" > version.txt

@@ -297,7 +297,6 @@ class BluOSPlayer:
 
             self._available = True
             self._reconnect_delay = MIN_RECONNECT_DELAY
-            self._connecting = False
 
             # Start volume/mute worker tasks
             self._volume_worker_task = asyncio.create_task(self._volume_worker())
@@ -310,19 +309,23 @@ class BluOSPlayer:
         except PlayerUnreachableError as e:
             _LOG.warning("Cannot reach %s: %s", self._device.name, e)
             self._available = False
-            self._connecting = False
             self._state = States.UNAVAILABLE
-            self._events.emit(Events.ERROR, str(e))
+            self._events.emit(Events.DISCONNECTED)
             self._schedule_reconnect()
             return False
 
         except PlayerError as e:
             _LOG.error("Error connecting to %s: %s", self._device.name, e)
             self._available = False
-            self._connecting = False
-            self._events.emit(Events.ERROR, str(e))
+            self._events.emit(Events.DISCONNECTED)
             self._schedule_reconnect()
             return False
+
+        finally:
+            # Always reset _connecting, even if the task was cancelled mid-connect.
+            # Without this, cancel_reconnect() during an in-progress connect() leaves
+            # _connecting=True permanently, blocking all future reconnect attempts.
+            self._connecting = False
 
     async def disconnect(self) -> None:
         """Disconnect from the BluOS player."""

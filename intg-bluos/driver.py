@@ -71,6 +71,44 @@ _active_poll_tasks: list[asyncio.Task] = []
 # Reset on each remote (re)connect so a fresh client always gets the state.
 _last_device_state: ucapi.DeviceStates | None = None
 
+# ---------------------------------------------------------------------------
+# DIAGNOSTICS (investigation branch only — not for release)
+# Instrumentation to validate the "remote stays awake after repeated activity
+# starts" hypothesis on real hardware: how much device-state churn we send to
+# the remote, and whether worker tasks / asyncio tasks grow over time (leak).
+# Remove this block (and its call sites) before merging to master.
+# ---------------------------------------------------------------------------
+_DIAG_INTERVAL = 30  # seconds between periodic snapshots
+_diag_state_pushed = 0
+_diag_state_suppressed = 0
+
+
+def _diag_worker_task_count() -> int:
+    """Count live volume/mute worker tasks (a leak indicator)."""
+    return sum(1 for t in asyncio.all_tasks(_LOOP) if "worker" in (t.get_coro().__qualname__ or ""))
+
+
+async def _diagnostics_logger() -> None:
+    """Periodically log resource and churn counters at INFO level."""
+    while True:
+        await asyncio.sleep(_DIAG_INTERVAL)
+        try:
+            total_tasks = len(asyncio.all_tasks(_LOOP))
+        except RuntimeError:
+            total_tasks = -1
+        players = {pid: ("up" if p.available else "down") for pid, p in _configured_players.items()}
+        _LOG.info(
+            "DIAG snapshot | asyncio_tasks=%d worker_tasks=%d players=%s standby=%s "
+            "device_state=%s state_pushed=%d state_suppressed=%d",
+            total_tasks,
+            _diag_worker_task_count(),
+            players,
+            _REMOTE_IN_STANDBY,
+            _last_device_state,
+            _diag_state_pushed,
+            _diag_state_suppressed,
+        )
+
 
 def _get_driver_path() -> str:
     """Get the path to driver.json, handling PyInstaller bundles."""
@@ -226,10 +264,15 @@ async def _set_device_state(state: ucapi.DeviceStates) -> None:
     value is the same; suppressing redundant pushes avoids waking the remote
     from low-power mode unnecessarily.
     """
-    global _last_device_state
+    global _last_device_state, _diag_state_pushed, _diag_state_suppressed
     if state == _last_device_state:
+        # DIAGNOSTICS: a message we avoided sending to the remote (would wake it).
+        _diag_state_suppressed += 1
+        _LOG.info("DIAG device-state SUPPRESSED %s (unchanged; total suppressed=%d)", state, _diag_state_suppressed)
         return
     _last_device_state = state
+    _diag_state_pushed += 1  # DIAGNOSTICS
+    _LOG.info("DIAG device-state PUSHED -> %s (total pushed=%d)", state, _diag_state_pushed)
     await api.set_device_state(state)
 
 
@@ -691,6 +734,9 @@ async def _main() -> None:
 
     # Start background status poller
     _LOOP.create_task(_status_poller())
+
+    # DIAGNOSTICS (investigation branch only): periodic resource/churn snapshots.
+    _LOOP.create_task(_diagnostics_logger())
 
     # Run the integration API with setup handler
     await api.init(_get_driver_path(), _setup_handler)

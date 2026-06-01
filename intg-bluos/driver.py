@@ -48,6 +48,11 @@ _REMOTE_IN_STANDBY = False
 # no CPU cycles while the remote is in standby.
 _poller_active = asyncio.Event()
 
+# In-flight long-poll tasks from the current poller iteration. Held so that
+# _on_enter_standby() can cancel them, releasing their HTTP connections to the
+# BluOS devices immediately instead of letting them linger until poll timeout.
+_active_poll_tasks: list[asyncio.Task] = []
+
 
 def _get_driver_path() -> str:
     """Get the path to driver.json, handling PyInstaller bundles."""
@@ -316,13 +321,20 @@ async def _status_poller() -> None:
             if not player.available and not player.is_reconnecting
         ]
 
-        # Poll all available players in parallel
+        # Poll all available players in parallel. Tasks are created explicitly
+        # (rather than handing coroutines straight to gather) so that
+        # _on_enter_standby() can cancel them mid-flight.
         polled_any = False
         if available_players:
-            results = await asyncio.gather(
-                *[_poll_single_player(device_id, player) for device_id, player in available_players],
-                return_exceptions=True,
-            )
+            global _active_poll_tasks
+            _active_poll_tasks = [
+                _LOOP.create_task(_poll_single_player(device_id, player)) for device_id, player in available_players
+            ]
+            try:
+                results = await asyncio.gather(*_active_poll_tasks, return_exceptions=True)
+            finally:
+                _active_poll_tasks = []
+            # Cancelled polls (e.g. on standby) come back as CancelledError, not True.
             polled_any = any(r is True for r in results)
 
         # Attempt to reconnect unavailable players that have no active reconnect task
@@ -372,6 +384,10 @@ async def _on_enter_standby() -> None:
     _LOG.info("UC Remote entering standby")
     _REMOTE_IN_STANDBY = True
     _poller_active.clear()  # Suspend the status poller completely during standby
+    # Cancel any in-flight long-polls so their HTTP connections to the BluOS
+    # devices are released immediately rather than lingering until poll timeout.
+    for task in _active_poll_tasks:
+        task.cancel()
     for player in _configured_players.values():
         player.cancel_reconnect()
     await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)

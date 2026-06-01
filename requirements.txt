@@ -1,4 +1,4 @@
-ucapi @ git+https://github.com/unfoldedcircle/integration-python-library.git@v0.6.0
+ucapi @ git+https://github.com/unfoldedcircle/integration-python-library.git@v0.7.0
 pyblu>=0.7.0
 pyee~=13.0.0
 zeroconf>=0.80.0

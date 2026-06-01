@@ -34,12 +34,10 @@ jobs:
           pip install pylint black isort
           black --check intg-bluos/ tests/
           isort --check-only intg-bluos/ tests/
-        continue-on-error: true
 
       - name: Run tests
         run: |
           PYTHONPATH=intg-bluos python -m pytest tests/ -v --cov=intg-bluos --cov-report=xml
-        continue-on-error: true
 
   build:
     runs-on: ubuntu-latest

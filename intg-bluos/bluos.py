@@ -282,6 +282,11 @@ class BluOSPlayer:
         self._connecting = True
         self._events.emit(Events.CONNECTING)
 
+        # Tear down any workers/session left over from a previous connection so
+        # reconnects don't accumulate orphaned worker tasks and unclosed sessions
+        # (the reconnect path never calls disconnect()).
+        await self._teardown()
+
         try:
             self._player = Player(
                 self._device.address,
@@ -340,7 +345,23 @@ class BluOSPlayer:
             self._reconnect_task.cancel()
             self._reconnect_task = None
 
-        # Stop volume/mute workers
+        await self._teardown()
+
+        self._available = False
+        self._connecting = False
+        self._state = States.UNAVAILABLE
+        self._events.emit(Events.DISCONNECTED)
+        _LOG.info("Disconnected from %s", self._device.name)
+
+    async def _teardown(self) -> None:
+        """
+        Cancel the volume/mute workers and close the player session.
+
+        Idempotent and event-free, so it runs both from disconnect() and at the
+        start of connect() to guarantee a clean slate. Without the connect()-time
+        call, the reconnect path (which never calls disconnect()) leaks a worker
+        pair and an unclosed HTTP session on every reconnect.
+        """
         if self._volume_worker_task:
             await self._volume_queue.put(None)  # Shutdown signal
             try:
@@ -362,12 +383,6 @@ class BluOSPlayer:
             except Exception as e:
                 _LOG.debug("Error closing player connection: %s", e)
             self._player = None
-
-        self._available = False
-        self._connecting = False
-        self._state = States.UNAVAILABLE
-        self._events.emit(Events.DISCONNECTED)
-        _LOG.info("Disconnected from %s", self._device.name)
 
     def _schedule_reconnect(self) -> None:
         """Schedule a reconnection attempt with exponential backoff."""

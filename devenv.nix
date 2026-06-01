@@ -67,7 +67,7 @@ in
 
     build.exec = ''
       echo "Building BluOS integration for host architecture..."
-      pyinstaller --clean --onedir \
+      pyinstaller --clean --onedir -y \
         --name driver \
         --paths intg-bluos \
         --add-data "driver.json:." \

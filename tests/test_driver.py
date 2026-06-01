@@ -113,6 +113,21 @@ class TestStandbyCancellation:
         assert not driver._poller_active.is_set()
         driver_state.set_device_state.assert_awaited_once_with(ucapi.DeviceStates.DISCONNECTED)
 
+    def test_enter_standby_disconnects_all_players(self, driver_state):
+        """Standby fully disconnects every configured player (closing sessions)."""
+        player_a = MagicMock()
+        player_a.disconnect = AsyncMock()
+        player_b = MagicMock()
+        player_b.disconnect = AsyncMock()
+        driver._configured_players["dev_a"] = player_a
+        driver._configured_players["dev_b"] = player_b
+
+        run(driver._on_enter_standby())
+
+        player_a.disconnect.assert_awaited_once()
+        player_b.disconnect.assert_awaited_once()
+        assert driver._REMOTE_IN_STANDBY is True
+
     def test_enter_standby_with_no_inflight_polls_is_safe(self, driver_state):
         """Entering standby with no in-flight polls does not raise."""
         driver._active_poll_tasks = []

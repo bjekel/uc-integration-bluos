@@ -409,11 +409,20 @@ async def _on_enter_standby() -> None:
     _REMOTE_IN_STANDBY = True
     _poller_active.clear()  # Suspend the status poller completely during standby
     # Cancel any in-flight long-polls so their HTTP connections to the BluOS
-    # devices are released immediately rather than lingering until poll timeout.
+    # devices are released before we tear the sessions down.
     for task in _active_poll_tasks:
         task.cancel()
-    for player in _configured_players.values():
-        player.cancel_reconnect()
+    # Fully disconnect every player: closes the aiohttp session and stops the
+    # volume/mute workers, matching the disconnect-on-standby convention used by
+    # the other UC integrations. A connection held open across the remote's
+    # suspend tends to come back stale and only fails after wake; tearing it down
+    # now means we reconnect cleanly on EXIT_STANDBY. disconnect() also cancels
+    # any pending reconnect backoff, so the explicit cancel_reconnect() loop is
+    # no longer needed.
+    await asyncio.gather(
+        *[player.disconnect() for player in _configured_players.values()],
+        return_exceptions=True,
+    )
     await _set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
 

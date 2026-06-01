@@ -44,52 +44,60 @@ class BluOSPresetSelect(ucapi.Select):
 
         self._device = device
         self._player = player
-        self._last_current_option: str = ""
+        # When True, the next attribute computation pushes every value
+        # regardless of the diff. Set by clear_cached_attributes() after a
+        # standby exit, when the Remote may have dropped state.
+        self._force_update: bool = False
 
-    def _compute_state_and_options_changes(self) -> dict[str, Any]:
-        """Compute and apply state + options changes; return a dict of what changed."""
-        changed: dict[str, Any] = {}
-        new_state = States.ON if self._player.available else States.UNAVAILABLE
-        if self.attributes.get(Attributes.STATE) != new_state:
-            changed[Attributes.STATE] = new_state
-            self.attributes[Attributes.STATE] = new_state
-        options = [preset.name for preset in self._player.presets]
-        if self.attributes.get(Attributes.OPTIONS) != options:
-            changed[Attributes.OPTIONS] = options
-            self.attributes[Attributes.OPTIONS] = options
+    def _compute_state_and_options(self) -> dict[str, Any]:
+        """Compute the current STATE and OPTIONS attribute values."""
+        return {
+            Attributes.STATE: States.ON if self._player.available else States.UNAVAILABLE,
+            Attributes.OPTIONS: [preset.name for preset in self._player.presets],
+        }
+
+    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
+        """
+        Return the subset of ``computed`` that differs from ``self.attributes``
+        and persist it locally.
+
+        State is diffed against ``self.attributes`` — the dict ucapi keeps in
+        sync with the Remote — so there is no separate shadow cache to drift.
+        When ``_force_update`` is set, every computed value is returned and the
+        flag is reset, forcing a full resync to the Remote.
+        """
+        if self._force_update:
+            self._force_update = False
+            changed = dict(computed)
+        else:
+            changed = {key: value for key, value in computed.items() if self.attributes.get(key) != value}
+        self.attributes.update(changed)
         return changed
 
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
-        Update entity attributes and return only changed ones.
+        Compute entity attributes from a BluOS status update and return only
+        those that differ from the current entity state.
 
         Args:
-            attributes: New attributes from BluOS player (includes 'source')
+            attributes: New attributes from BluOS player (includes 'current_preset')
 
         Returns:
             Dictionary of changed attributes
         """
-        changed = self._compute_state_and_options_changes()
-
-        # Determine current option from tracked preset name
+        computed = self._compute_state_and_options()
         current_preset = attributes.get("current_preset")
-        current_option = current_preset if current_preset else ""
-
-        if current_option != self._last_current_option:
-            changed[Attributes.CURRENT_OPTION] = current_option
-            self.attributes[Attributes.CURRENT_OPTION] = current_option
-            self._last_current_option = current_option
-
-        return changed
+        computed[Attributes.CURRENT_OPTION] = current_preset if current_preset else ""
+        return self._diff_attributes(computed)
 
     def refresh_options(self) -> dict[str, Any]:
         """
-        Refresh options from player presets.
+        Refresh state and options from player presets.
 
         Returns:
             Dictionary of changed attributes
         """
-        return self._compute_state_and_options_changes()
+        return self._diff_attributes(self._compute_state_and_options())
 
     def set_unavailable(self) -> dict[str, Any]:
         """
@@ -104,8 +112,14 @@ class BluOSPresetSelect(ucapi.Select):
         return {}
 
     def clear_cached_attributes(self) -> None:
-        """Clear cached attributes to force full update on next poll."""
-        self._last_current_option = ""
+        """
+        Force the next attribute update to push all values.
+
+        Used after a standby exit, when the Remote may have dropped our state.
+        State is diffed against ``self.attributes`` directly, so there is no
+        separate cache to clear.
+        """
+        self._force_update = True
 
     async def command(self, cmd_id: str, params: dict[str, Any] | None = None, **_kwargs: Any) -> ucapi.StatusCodes:
         """
@@ -179,7 +193,7 @@ class BluOSPresetSelect(ucapi.Select):
         Returns:
             Index of current preset, or None if not found
         """
-        current = self._last_current_option
+        current = self.attributes.get(Attributes.CURRENT_OPTION, "")
         if not current:
             return None
 

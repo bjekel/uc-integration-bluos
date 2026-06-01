@@ -158,14 +158,20 @@ class TestBluOSPresetSelect:
         assert changed == {}
 
     def test_clear_cached_attributes(self, entity, mock_player):
-        """Test clearing cached attributes."""
+        """Test that clear_cached_attributes forces a full re-push on the next update."""
         mock_player.available = True
         entity.update_attributes({"current_preset": "Jazz FM"})
-        assert entity._last_current_option == "Jazz FM"
+        # A repeat update with unchanged state normally yields no changes.
+        assert entity.update_attributes({"current_preset": "Jazz FM"}) == {}
 
         entity.clear_cached_attributes()
 
-        assert entity._last_current_option == ""
+        # After clearing, the next update re-pushes every value even though
+        # nothing changed.
+        changed = entity.update_attributes({"current_preset": "Jazz FM"})
+        assert changed[Attributes.CURRENT_OPTION] == "Jazz FM"
+        assert Attributes.STATE in changed
+        assert Attributes.OPTIONS in changed
 
     @pytest.mark.asyncio
     async def test_command_select_option(self, entity, mock_player):
@@ -210,7 +216,7 @@ class TestBluOSPresetSelect:
         mock_player.select_source = AsyncMock(return_value=True)
         mock_player.available = True
         # Set current option
-        entity._last_current_option = "Radio Paradise"
+        entity.attributes[Attributes.CURRENT_OPTION] = "Radio Paradise"
 
         result = await entity.command(Commands.SELECT_NEXT, {})
 
@@ -223,7 +229,7 @@ class TestBluOSPresetSelect:
         mock_player.select_source = AsyncMock(return_value=True)
         mock_player.available = True
         # Set current option to last
-        entity._last_current_option = "Classical"
+        entity.attributes[Attributes.CURRENT_OPTION] = "Classical"
 
         result = await entity.command(Commands.SELECT_NEXT, {})
 
@@ -246,7 +252,7 @@ class TestBluOSPresetSelect:
         mock_player.select_source = AsyncMock(return_value=True)
         mock_player.available = True
         # Set current option
-        entity._last_current_option = "Jazz FM"
+        entity.attributes[Attributes.CURRENT_OPTION] = "Jazz FM"
 
         result = await entity.command(Commands.SELECT_PREVIOUS, {})
 
@@ -259,7 +265,7 @@ class TestBluOSPresetSelect:
         mock_player.select_source = AsyncMock(return_value=True)
         mock_player.available = True
         # Set current option to first
-        entity._last_current_option = "Radio Paradise"
+        entity.attributes[Attributes.CURRENT_OPTION] = "Radio Paradise"
 
         result = await entity.command(Commands.SELECT_PREVIOUS, {})
 
@@ -345,7 +351,7 @@ class TestBluOSPresetSelectEmptyPresets:
 
     def test_get_current_preset_index_empty_presets(self, entity_no_presets):
         """Test _get_current_preset_index returns None with empty presets."""
-        entity_no_presets._last_current_option = "Something"
+        entity_no_presets.attributes[Attributes.CURRENT_OPTION] = "Something"
         assert entity_no_presets._get_current_preset_index() is None
 
     def test_get_current_preset_index_no_current(self, entity_no_presets):

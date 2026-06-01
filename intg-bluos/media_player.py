@@ -182,7 +182,10 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
         self._device = device
         self._player = player
-        self._last_attributes: dict[str, Any] = {}
+        # When True, the next update_attributes() call pushes every computed
+        # value regardless of the diff. Set by clear_cached_attributes() after a
+        # (re)subscribe or standby exit, when the Remote may have dropped state.
+        self._force_update: bool = False
         self._last_search_key: str | None = None
         # Maps browseKey → playURL for items that are both browsable and playable
         self._play_url_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
@@ -196,7 +199,16 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
-        Update entity attributes and return only changed ones.
+        Compute entity attributes from a BluOS status update and return only
+        those that differ from the current entity state.
+
+        State is diffed against ``self.attributes`` — the dict ucapi keeps in
+        sync with the Remote whenever an update is pushed — so there is no
+        separate shadow cache that can drift out of sync. The diff is written
+        back into ``self.attributes`` so later reads (command handling,
+        ``set_unavailable``) observe the current state; the driver still pushes
+        the returned diff to the Remote. When ``_force_update`` is set (after a
+        resubscribe or standby exit) every computed value is returned.
 
         Args:
             attributes: New attributes from BluOS player
@@ -204,24 +216,13 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         Returns:
             Dictionary of changed attributes
         """
-        changed = {}
-
-        # Map BluOS state to UC state
         state = self._map_state(attributes.get("state", BluOSStates.UNKNOWN))
-        if state != self._last_attributes.get(Attributes.STATE):
-            changed[Attributes.STATE] = state
-            self._last_attributes[Attributes.STATE] = state
 
-        # Update source list
-        source_list = self._player.get_source_list()
-        if source_list != self._last_attributes.get(Attributes.SOURCE_LIST):
-            changed[Attributes.SOURCE_LIST] = source_list
-            self._last_attributes[Attributes.SOURCE_LIST] = source_list
+        computed: dict[str, Any] = {
+            Attributes.STATE: state,
+            Attributes.SOURCE_LIST: self._player.get_source_list(),
+        }
 
-        # Track if media_title changed (indicates new track)
-        track_changed = False
-
-        # Map other attributes
         attr_mapping = {
             "volume": Attributes.VOLUME,
             "muted": Attributes.MUTED,
@@ -234,56 +235,69 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             "shuffle": Attributes.SHUFFLE,
             "source": Attributes.SOURCE,
         }
-
         for bluos_attr, uc_attr in attr_mapping.items():
             value = attributes.get(bluos_attr)
-            last_value = self._last_attributes.get(uc_attr)
-            if value is not None and value != last_value:
-                changed[uc_attr] = value
-                self._last_attributes[uc_attr] = value
-                # Detect track change
-                if uc_attr == Attributes.MEDIA_TITLE:
-                    track_changed = True
+            if value is not None:
+                computed[uc_attr] = value
 
-        # Force position update on track change (even if value is same)
-        if track_changed:
-            position = attributes.get("media_position")
-            if position is not None:
-                changed[Attributes.MEDIA_POSITION] = position
-                self._last_attributes[Attributes.MEDIA_POSITION] = position
-
-        # Handle repeat mode separately (needs mapping from BluOS to UC)
+        # Map repeat mode from BluOS to UC
         repeat = attributes.get("repeat")
         if repeat is not None:
-            uc_repeat = self._map_repeat_mode(repeat)
-            if uc_repeat != self._last_attributes.get(Attributes.REPEAT):
-                changed[Attributes.REPEAT] = uc_repeat
-                self._last_attributes[Attributes.REPEAT] = uc_repeat
+            computed[Attributes.REPEAT] = self._map_repeat_mode(repeat)
 
         # Clear media info when not playing
         if state in (States.OFF, States.STANDBY, States.UNAVAILABLE):
-            for attr in [
+            for attr in (
                 Attributes.MEDIA_TITLE,
                 Attributes.MEDIA_ARTIST,
                 Attributes.MEDIA_ALBUM,
                 Attributes.MEDIA_IMAGE_URL,
-            ]:
-                if self._last_attributes.get(attr):
-                    changed[attr] = ""
-                    self._last_attributes[attr] = ""
+            ):
+                computed[attr] = ""
 
+        changed = self._diff_attributes(computed)
+
+        # Force a position update on track change, even when the numeric value
+        # happens to match, so the Remote restarts its progress bar.
+        if Attributes.MEDIA_TITLE in changed:
+            position = attributes.get("media_position")
+            if position is not None:
+                changed[Attributes.MEDIA_POSITION] = position
+
+        # Persist the diff locally so command handling and set_unavailable read
+        # current state; the driver pushes `changed` to the Remote, which writes
+        # the same values again, harmlessly.
+        self.attributes.update(changed)
         return changed
+
+    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
+        """
+        Return the subset of ``computed`` that differs from ``self.attributes``.
+
+        When ``_force_update`` is set, every computed value is returned and the
+        flag is reset, forcing a full resync to the Remote.
+        """
+        if self._force_update:
+            self._force_update = False
+            return dict(computed)
+        return {key: value for key, value in computed.items() if self.attributes.get(key) != value}
 
     def set_unavailable(self) -> dict[str, Any]:
         """Mark entity as unavailable and return changed attributes."""
-        if self._last_attributes.get(Attributes.STATE) != States.UNAVAILABLE:
-            self._last_attributes[Attributes.STATE] = States.UNAVAILABLE
+        if self.attributes.get(Attributes.STATE) != States.UNAVAILABLE:
+            self.attributes[Attributes.STATE] = States.UNAVAILABLE
             return {Attributes.STATE: States.UNAVAILABLE}
         return {}
 
     def clear_cached_attributes(self) -> None:
-        """Clear cached attributes to force full update on next poll."""
-        self._last_attributes.clear()
+        """
+        Force the next update_attributes() call to push all values.
+
+        Used after a (re)subscribe or standby exit, when the Remote may have
+        dropped our state. State is diffed against ``self.attributes`` directly,
+        so there is no separate cache to clear.
+        """
+        self._force_update = True
 
     def update_options(self) -> dict[str, Any]:
         """Update and return entity options with current simple commands."""
@@ -453,13 +467,13 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 # Update options with new preset commands
                 self.update_options()
                 # Clear cached source list so next poll sends update to UC Remote
-                self._last_attributes.pop(Attributes.SOURCE_LIST, None)
+                self.attributes.pop(Attributes.SOURCE_LIST, None)
                 return ucapi.StatusCodes.OK
             return ucapi.StatusCodes.SERVER_ERROR
 
         # Handle shuffle toggle command
         if cmd_id == "SHUFFLE_TOGGLE":
-            current = self._last_attributes.get(Attributes.SHUFFLE, False)
+            current = self.attributes.get(Attributes.SHUFFLE, False)
             result = await self._player.set_shuffle(not current)
             return ucapi.StatusCodes.OK if result else ucapi.StatusCodes.SERVER_ERROR
 
@@ -486,7 +500,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 result = await self._player.stop()
 
             case Commands.TOGGLE | Commands.PLAY_PAUSE:
-                if self._last_attributes.get(Attributes.STATE) == States.PLAYING:
+                if self.attributes.get(Attributes.STATE) == States.PLAYING:
                     result = await self._player.pause()
                 else:
                     result = await self._player.play()
@@ -497,30 +511,30 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             case Commands.NEXT:
                 result = await self._player.next_track()
                 # Clear position cache to force update on next poll
-                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                self.attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.PREVIOUS:
                 result = await self._player.previous_track()
                 # Clear position cache to force update on next poll
-                self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                self.attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.FAST_FORWARD:
-                current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
-                duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
+                current_pos = self.attributes.get(Attributes.MEDIA_POSITION, 0)
+                duration = self.attributes.get(Attributes.MEDIA_DURATION, 0)
                 if duration:
                     new_pos = min(current_pos + SEEK_STEP, duration)
                     result = await self._player.seek(int(new_pos))
-                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                    self.attributes.pop(Attributes.MEDIA_POSITION, None)
                 else:
                     result = True  # no-op for streams with unknown duration
 
             case Commands.REWIND:
-                current_pos = self._last_attributes.get(Attributes.MEDIA_POSITION, 0)
-                duration = self._last_attributes.get(Attributes.MEDIA_DURATION, 0)
+                current_pos = self.attributes.get(Attributes.MEDIA_POSITION, 0)
+                duration = self.attributes.get(Attributes.MEDIA_DURATION, 0)
                 if duration:
                     new_pos = max(current_pos - SEEK_STEP, 0)
                     result = await self._player.seek(int(new_pos))
-                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                    self.attributes.pop(Attributes.MEDIA_POSITION, None)
                 else:
                     result = True  # no-op for streams with unknown duration
 
@@ -559,7 +573,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
                 if position is not None:
                     result = await self._player.seek(int(position))
                     # Clear position cache to force update on next poll
-                    self._last_attributes.pop(Attributes.MEDIA_POSITION, None)
+                    self.attributes.pop(Attributes.MEDIA_POSITION, None)
 
             case Commands.SELECT_SOURCE:
                 source = params.get("source")

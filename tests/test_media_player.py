@@ -189,7 +189,7 @@ class TestBluOSMediaPlayer:
 
     def test_set_unavailable_already_unavailable(self, entity):
         """Test set_unavailable when already unavailable returns empty."""
-        # First call sets _last_attributes to UNAVAILABLE
+        # First call marks the entity UNAVAILABLE
         entity.set_unavailable()
         # Second call should return empty since already unavailable
         changed = entity.set_unavailable()
@@ -198,7 +198,7 @@ class TestBluOSMediaPlayer:
     @pytest.mark.asyncio
     async def test_command_play_pause_when_playing(self, entity, mock_player):
         """Test play_pause command when playing."""
-        entity._last_attributes[Attributes.STATE] = States.PLAYING
+        entity.attributes[Attributes.STATE] = States.PLAYING
         mock_player.pause = AsyncMock(return_value=True)
 
         result = await entity.command(Commands.PLAY_PAUSE, {})
@@ -209,7 +209,7 @@ class TestBluOSMediaPlayer:
     @pytest.mark.asyncio
     async def test_command_play_pause_when_paused(self, entity, mock_player):
         """Test play_pause command when paused."""
-        entity._last_attributes[Attributes.STATE] = States.PAUSED
+        entity.attributes[Attributes.STATE] = States.PAUSED
         mock_player.play = AsyncMock(return_value=True)
 
         result = await entity.command(Commands.PLAY_PAUSE, {})

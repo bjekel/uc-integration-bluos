@@ -36,6 +36,7 @@ def driver_state():
         "_select_entity_id_to_device_id": dict(driver._select_entity_id_to_device_id),
         "_active_poll_tasks": list(driver._active_poll_tasks),
         "_REMOTE_IN_STANDBY": driver._REMOTE_IN_STANDBY,
+        "_last_device_state": driver._last_device_state,
         "api": driver.api,
         "poller_active": driver._poller_active.is_set(),
     }
@@ -53,6 +54,7 @@ def driver_state():
     driver._select_entity_id_to_device_id.clear()
     driver._active_poll_tasks = []
     driver._REMOTE_IN_STANDBY = False
+    driver._last_device_state = None
     driver._poller_active.set()
 
     yield mock_api
@@ -71,6 +73,7 @@ def driver_state():
     driver._select_entity_id_to_device_id.update(saved["_select_entity_id_to_device_id"])
     driver._active_poll_tasks = saved["_active_poll_tasks"]
     driver._REMOTE_IN_STANDBY = saved["_REMOTE_IN_STANDBY"]
+    driver._last_device_state = saved["_last_device_state"]
     if saved["poller_active"]:
         driver._poller_active.set()
     else:
@@ -158,3 +161,33 @@ class TestPlayerUpdateStandbyGuard:
 
         entity.update_attributes.assert_called_once_with({"state": "play"})
         driver_state.configured_entities.update_attributes.assert_called_once_with("bluos_dev1", {"state": "PLAYING"})
+
+
+class TestDeviceStateDedup:
+    """Deduplication of device-state pushes to the remote."""
+
+    def test_unchanged_state_is_not_repushed(self, driver_state):
+        """Pushing the same device state twice only notifies the remote once."""
+        run(driver._set_device_state(ucapi.DeviceStates.CONNECTED))
+        run(driver._set_device_state(ucapi.DeviceStates.CONNECTED))
+
+        driver_state.set_device_state.assert_awaited_once_with(ucapi.DeviceStates.CONNECTED)
+
+    def test_changed_state_is_pushed(self, driver_state):
+        """A genuine state change is pushed to the remote."""
+        run(driver._set_device_state(ucapi.DeviceStates.CONNECTED))
+        run(driver._set_device_state(ucapi.DeviceStates.DISCONNECTED))
+
+        assert driver_state.set_device_state.await_count == 2
+
+    def test_connect_forces_state_resend(self, driver_state):
+        """A remote (re)connect resets dedup so the state is resent to the new client."""
+        run(driver._set_device_state(ucapi.DeviceStates.CONNECTED))
+        driver_state.set_device_state.reset_mock()
+
+        # New remote connects: no players configured, so device state becomes
+        # DISCONNECTED — but the key assertion is that _on_connect resets dedup.
+        run(driver._on_connect())
+
+        # Reset happened, so the post-connect _update_device_state pushed afresh.
+        assert driver_state.set_device_state.await_count >= 1

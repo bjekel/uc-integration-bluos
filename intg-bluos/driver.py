@@ -53,6 +53,12 @@ _poller_active = asyncio.Event()
 # BluOS devices immediately instead of letting them linger until poll timeout.
 _active_poll_tasks: list[asyncio.Task] = []
 
+# Last device state pushed to the remote. ucapi notifies the remote on every
+# set_device_state() call even when the value is unchanged, and those messages
+# can wake the remote from low-power mode, so we suppress redundant updates.
+# Reset on each remote (re)connect so a fresh client always gets the state.
+_last_device_state: ucapi.DeviceStates | None = None
+
 
 def _get_driver_path() -> str:
     """Get the path to driver.json, handling PyInstaller bundles."""
@@ -163,12 +169,26 @@ def _any_player_connected() -> bool:
     return any(player.available for player in _configured_players.values())
 
 
+async def _set_device_state(state: ucapi.DeviceStates) -> None:
+    """Push device state to the remote, skipping the call if it is unchanged.
+
+    ucapi notifies the remote on every set_device_state() call even when the
+    value is the same; suppressing redundant pushes avoids waking the remote
+    from low-power mode unnecessarily.
+    """
+    global _last_device_state
+    if state == _last_device_state:
+        return
+    _last_device_state = state
+    await api.set_device_state(state)
+
+
 async def _update_device_state() -> None:
     """Update the integration device state based on player connections."""
     connected = _any_player_connected()
     new_state = ucapi.DeviceStates.CONNECTED if connected else ucapi.DeviceStates.DISCONNECTED
     _LOG.debug("Updating device state to %s (any player connected: %s)", new_state, connected)
-    await api.set_device_state(new_state)
+    await _set_device_state(new_state)
 
 
 def _on_player_connected(device_id: str) -> None:
@@ -356,7 +376,7 @@ async def _connect_unavailable_players() -> None:
     """Connect all players that are currently unavailable."""
     players_to_connect = [p for p in _configured_players.values() if not p.available]
     if players_to_connect:
-        await api.set_device_state(ucapi.DeviceStates.CONNECTING)
+        await _set_device_state(ucapi.DeviceStates.CONNECTING)
         await asyncio.gather(
             *[player.connect() for player in players_to_connect],
             return_exceptions=True,
@@ -366,7 +386,11 @@ async def _connect_unavailable_players() -> None:
 @api.listens_to(ucapi.Events.CONNECT)
 async def _on_connect() -> None:
     """Handle UC Remote connect event."""
+    global _last_device_state
     _LOG.info("UC Remote connected")
+    # Force the next push so a freshly (re)connected remote always receives the
+    # current device state, even if it matches the last value we sent.
+    _last_device_state = None
     await _connect_unavailable_players()
     await _update_device_state()
 
@@ -390,7 +414,7 @@ async def _on_enter_standby() -> None:
         task.cancel()
     for player in _configured_players.values():
         player.cancel_reconnect()
-    await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
+    await _set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
 
 @api.listens_to(ucapi.Events.EXIT_STANDBY)
@@ -543,7 +567,7 @@ async def _main() -> None:
     # Register existing devices
     existing_devices = _devices.all()
     if existing_devices:
-        await api.set_device_state(ucapi.DeviceStates.CONNECTING)
+        await _set_device_state(ucapi.DeviceStates.CONNECTING)
     for device in existing_devices:
         await _add_player(device)
 

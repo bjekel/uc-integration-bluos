@@ -179,6 +179,37 @@ class TestBluOSPlayer:
             assert player.state == States.UNAVAILABLE
 
     @pytest.mark.asyncio
+    async def test_reconnect_does_not_leak_workers_or_sessions(self, player):
+        """Reconnecting (connect without an intervening disconnect) must tear down
+        the previous workers and session rather than orphaning them."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.close = AsyncMock()
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            vol1, mute1 = player._volume_worker_task, player._mute_worker_task
+            assert not vol1.done() and not mute1.done()
+
+            # Reconnect: connect() again with no disconnect (the reconnect path).
+            await player.connect()
+            await asyncio.sleep(0)
+            vol2, mute2 = player._volume_worker_task, player._mute_worker_task
+
+            # New workers replaced the old ones, and the old ones were torn down
+            # (not left running) — i.e. no leak.
+            assert vol2 is not vol1 and mute2 is not mute1
+            assert vol1.done() and mute1.done()
+            # The prior pyblu session was closed during teardown.
+            assert mock_pyblu_player.close.call_count == 1
+
+            await player.disconnect()
+            await asyncio.sleep(0)
+            assert vol2.done() and mute2.done()
+
+    @pytest.mark.asyncio
     async def test_play(self, player):
         """Test play command."""
         mock_pyblu_player = MagicMock()

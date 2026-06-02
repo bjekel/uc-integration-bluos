@@ -74,18 +74,50 @@ _last_device_state: ucapi.DeviceStates | None = None
 # ---------------------------------------------------------------------------
 # DIAGNOSTICS (investigation branch only — not for release)
 # Instrumentation to validate the "remote stays awake after repeated activity
-# starts" hypothesis on real hardware: how much device-state churn we send to
-# the remote, and whether worker tasks / asyncio tasks grow over time (leak).
+# starts" hypothesis on real hardware. Two wake channels are measured:
+#   1. device-state pushes (set_device_state) — the minor channel.
+#   2. entity attribute pushes (update_attributes) — the DOMINANT channel, since
+#      every poll during playback diffs a changed media_position and pushes it,
+#      waking the remote. We count pushes per entity kind and flag the telling
+#      case where media_position was the ONLY thing that changed.
+# Both worker-task and asyncio-task counts are tracked as leak indicators.
 # Remove this block (and its call sites) before merging to master.
 # ---------------------------------------------------------------------------
 _DIAG_INTERVAL = 30  # seconds between periodic snapshots
 _diag_state_pushed = 0
 _diag_state_suppressed = 0
+_diag_attr_pushed = 0  # total entity attribute pushes to the remote
+_diag_attr_pushed_by_kind: dict[str, int] = {}  # per entity kind (mediaplayer/select/sensor/remote)
+_diag_position_only_pushes = 0  # pushes whose sole changed attribute was media_position
 
 
 def _diag_worker_task_count() -> int:
     """Count live volume/mute worker tasks (a leak indicator)."""
     return sum(1 for t in asyncio.all_tasks(_LOOP) if "worker" in (t.get_coro().__qualname__ or ""))
+
+
+def _diag_record_attr_push(kind: str, changed: dict[str, Any]) -> None:
+    """Record one entity attribute push to the remote (a wake event).
+
+    Logs which entity kind and which attribute keys drove the push, and flags
+    the case where media_position was the only change — i.e. the remote was
+    woken purely by the progress bar ticking.
+    """
+    global _diag_attr_pushed, _diag_position_only_pushes
+    _diag_attr_pushed += 1
+    _diag_attr_pushed_by_kind[kind] = _diag_attr_pushed_by_kind.get(kind, 0) + 1
+    keys = list(changed.keys())
+    position_only = len(keys) == 1 and "position" in str(keys[0]).lower()
+    if position_only:
+        _diag_position_only_pushes += 1
+    _LOG.info(
+        "DIAG attr-push %s keys=%s position_only=%s (total pushed=%d, position_only=%d)",
+        kind,
+        [str(k) for k in keys],
+        position_only,
+        _diag_attr_pushed,
+        _diag_position_only_pushes,
+    )
 
 
 async def _diagnostics_logger() -> None:
@@ -99,7 +131,8 @@ async def _diagnostics_logger() -> None:
         players = {pid: ("up" if p.available else "down") for pid, p in _configured_players.items()}
         _LOG.info(
             "DIAG snapshot | asyncio_tasks=%d worker_tasks=%d players=%s standby=%s "
-            "device_state=%s state_pushed=%d state_suppressed=%d",
+            "device_state=%s state_pushed=%d state_suppressed=%d "
+            "attr_pushed=%d attr_by_kind=%s position_only_pushes=%d",
             total_tasks,
             _diag_worker_task_count(),
             players,
@@ -107,6 +140,9 @@ async def _diagnostics_logger() -> None:
             _last_device_state,
             _diag_state_pushed,
             _diag_state_suppressed,
+            _diag_attr_pushed,
+            _diag_attr_pushed_by_kind,
+            _diag_position_only_pushes,
         )
 
 
@@ -384,6 +420,7 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         entity = _entities[device_id]
         changed = entity.update_attributes(attributes)
         if changed:
+            _diag_record_attr_push("mediaplayer", changed)  # DIAGNOSTICS
             api.configured_entities.update_attributes(entity.id, changed)
 
     # Update select entity attributes
@@ -391,6 +428,7 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         select_entity = _select_entities[device_id]
         changed = select_entity.update_attributes(attributes)
         if changed:
+            _diag_record_attr_push("select", changed)  # DIAGNOSTICS
             api.configured_entities.update_attributes(select_entity.id, changed)
 
     # Update group sensor attributes
@@ -398,6 +436,7 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         sensor_entity = _sensor_entities[device_id]
         changed = sensor_entity.update_attributes(attributes)
         if changed:
+            _diag_record_attr_push("sensor", changed)  # DIAGNOSTICS
             api.configured_entities.update_attributes(sensor_entity.id, changed)
 
     # Update remote entity state
@@ -405,6 +444,7 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         remote_entity = _remote_entities[device_id]
         changed = remote_entity.update_attributes(attributes)
         if changed:
+            _diag_record_attr_push("remote", changed)  # DIAGNOSTICS
             api.configured_entities.update_attributes(remote_entity.id, changed)
 
 

@@ -16,6 +16,7 @@ from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
 from pyblu.errors import PlayerError, PlayerUnreachableError
 from select_entity import BluOSPresetSelect
+from sensor_entity import BluOSGroupSensor
 from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
@@ -34,11 +35,19 @@ api = ucapi.IntegrationAPI(_LOOP)
 _configured_players: dict[str, BluOSPlayer] = {}
 _entities: dict[str, BluOSMediaPlayer] = {}
 _select_entities: dict[str, BluOSPresetSelect] = {}
+_sensor_entities: dict[str, BluOSGroupSensor] = {}
 _devices: Devices | None = None
 
 # Reverse maps for O(1) entity-id → device-id lookup in command handler and subscribe handler.
 _entity_id_to_device_id: dict[str, str] = {}
 _select_entity_id_to_device_id: dict[str, str] = {}
+_sensor_entity_id_to_device_id: dict[str, str] = {}
+
+
+def _group_targets(device_id: str) -> list[BluOSPlayer]:
+    """Return the other configured players ``device_id`` can be grouped with."""
+    return [player for did, player in _configured_players.items() if did != device_id]
+
 
 # Remote state
 _REMOTE_IN_STANDBY = False
@@ -113,7 +122,7 @@ async def _add_player(device: BluOSDevice) -> None:
     _configured_players[device.id] = player
 
     # Create media player entity
-    entity = BluOSMediaPlayer(device, player)
+    entity = BluOSMediaPlayer(device, player, lambda did=device.id: _group_targets(did))
     _entities[device.id] = entity
     _entity_id_to_device_id[entity.id] = device.id
 
@@ -135,6 +144,17 @@ async def _add_player(device: BluOSDevice) -> None:
     api.available_entities.add(select_entity)
 
     _LOG.info("Registered select entity: %s", select_entity.id)
+
+    # Create group sensor entity (multi-room membership)
+    sensor_entity = BluOSGroupSensor(device, player, lambda did=device.id: _group_targets(did))
+    _sensor_entities[device.id] = sensor_entity
+    _sensor_entity_id_to_device_id[sensor_entity.id] = device.id
+
+    if api.available_entities.contains(sensor_entity.id):
+        api.available_entities.remove(sensor_entity.id)
+    api.available_entities.add(sensor_entity)
+
+    _LOG.info("Registered group sensor entity: %s", sensor_entity.id)
 
     # Connect if not in standby
     if not _REMOTE_IN_STANDBY:
@@ -162,6 +182,14 @@ async def _remove_player(device_id: str) -> None:
             api.available_entities.remove(select_entity.id)
         if api.configured_entities.contains(select_entity.id):
             api.configured_entities.remove(select_entity.id)
+
+    if device_id in _sensor_entities:
+        sensor_entity = _sensor_entities.pop(device_id)
+        _sensor_entity_id_to_device_id.pop(sensor_entity.id, None)
+        if api.available_entities.contains(sensor_entity.id):
+            api.available_entities.remove(sensor_entity.id)
+        if api.configured_entities.contains(sensor_entity.id):
+            api.configured_entities.remove(sensor_entity.id)
 
 
 def _any_player_connected() -> bool:
@@ -259,6 +287,13 @@ def _on_player_disconnected(device_id: str) -> None:
         if changed:
             api.configured_entities.update_attributes(select_entity.id, changed)
 
+    # Set group sensor unavailable
+    if device_id in _sensor_entities:
+        sensor_entity = _sensor_entities[device_id]
+        changed = sensor_entity.set_unavailable()
+        if changed:
+            api.configured_entities.update_attributes(sensor_entity.id, changed)
+
 
 def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
     """Handle player update event."""
@@ -277,6 +312,13 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         changed = select_entity.update_attributes(attributes)
         if changed:
             api.configured_entities.update_attributes(select_entity.id, changed)
+
+    # Update group sensor attributes
+    if device_id in _sensor_entities:
+        sensor_entity = _sensor_entities[device_id]
+        changed = sensor_entity.update_attributes(attributes)
+        if changed:
+            api.configured_entities.update_attributes(sensor_entity.id, changed)
 
 
 async def _poll_player(device_id: str) -> None:
@@ -442,6 +484,8 @@ async def _on_exit_standby() -> None:
         entity.clear_cached_attributes()
         if device_id in _select_entities:
             _select_entities[device_id].clear_cached_attributes()
+        if device_id in _sensor_entities:
+            _sensor_entities[device_id].clear_cached_attributes()
 
     # Parallel status refresh for all available players
     available_players = [(device_id, player) for device_id, player in _configured_players.items() if player.available]
@@ -483,6 +527,13 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
                     else:
                         # Even if no change, send current attributes to ensure UC has them
                         api.configured_entities.update_attributes(select_entity.id, select_entity.attributes)
+            continue
+
+        if device_id := _sensor_entity_id_to_device_id.get(entity_id):
+            sensor_entity = _sensor_entities[device_id]
+            # Push current group state; the next poll refreshes it.
+            sensor_entity.clear_cached_attributes()
+            api.configured_entities.update_attributes(sensor_entity.id, sensor_entity.attributes)
 
 
 @api.listens_to(ucapi.Events.UNSUBSCRIBE_ENTITIES)

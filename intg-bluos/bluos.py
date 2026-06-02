@@ -106,6 +106,10 @@ class BluOSPlayer:
         self._sleep_timer = 0
         self._current_preset_name: str | None = None
 
+        # Latest multi-room sync status, refreshed opportunistically on each poll.
+        # Used to render the group sensor and to resolve current followers/leader.
+        self._sync_status: SyncStatus | None = None
+
         # Volume handling - worker queues for sequential processing
         self._volume_queue: asyncio.Queue[int | None] = asyncio.Queue()
         self._mute_queue: asyncio.Queue[bool | None] = asyncio.Queue()
@@ -459,6 +463,11 @@ class BluOSPlayer:
             status = await self._player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
             self._last_etag = status.etag
 
+            # Opportunistically refresh group membership alongside the status poll
+            # (cheap, no long-poll). A failure here must not abort the status
+            # update, so we keep the previous sync status on error.
+            await self._refresh_sync_status()
+
             attributes = self._status_to_attributes(status)
             new_state = attributes["state"]
 
@@ -535,7 +544,47 @@ class BluOSPlayer:
             "repeat": self._repeat_mode,
             "source": status.input_id or "",
             "current_preset": self._current_preset_name,
+            **self._group_info(status),
         }
+
+    def _group_info(self, status: Status) -> dict[str, Any]:
+        """
+        Derive multi-room group attributes from the cached sync status.
+
+        Returns raw (ip, port) endpoints rather than names; mapping endpoints to
+        friendly device names needs knowledge of the other configured players,
+        which lives in the driver/entity layer.
+
+        Keys:
+            group_role: "leader", "follower" or "standalone"
+            group_leader: (ip, port) of the leader if this player is a follower
+            group_followers: list of (ip, port) followers if this player is leader
+            group_name: BluOS group name (leader only), or ""
+        """
+        sync = self._sync_status
+        if sync is not None and sync.leader is not None:
+            role = "follower"
+        elif sync is not None and sync.followers:
+            role = "leader"
+        else:
+            role = "standalone"
+
+        leader = (sync.leader.ip, sync.leader.port) if sync and sync.leader else None
+        followers = [(f.ip, f.port) for f in sync.followers] if sync and sync.followers else []
+
+        return {
+            "group_role": role,
+            "group_leader": leader,
+            "group_followers": followers,
+            "group_name": status.group_name or "",
+        }
+
+    async def _refresh_sync_status(self) -> None:
+        """Refresh the cached sync status, leaving the previous value on error."""
+        try:
+            self._sync_status = await self._player.sync_status()
+        except (PlayerError, PlayerUnreachableError) as e:
+            _LOG.debug("Sync status refresh failed for %s: %s", self._device.name, e)
 
     @staticmethod
     def _map_state(bluos_state: str | None) -> States:
@@ -851,6 +900,51 @@ class BluOSPlayer:
         except PlayerError as e:
             _LOG.error("Remove follower failed: %s", e)
             return False
+
+    @property
+    def sync_status(self) -> SyncStatus | None:
+        """Most recently cached multi-room sync status (refreshed each poll)."""
+        return self._sync_status
+
+    async def group_with(self, target: "BluOSPlayer") -> bool:
+        """Add ``target`` as a follower of this player (this player leads)."""
+        ok = await self.add_follower(target.device.address, target.device.port)
+        if ok:
+            self._schedule_poll()
+        return ok
+
+    async def ungroup(self, target: "BluOSPlayer") -> bool:
+        """Remove ``target`` from this player's group."""
+        ok = await self.remove_follower(target.device.address, target.device.port)
+        if ok:
+            self._schedule_poll()
+        return ok
+
+    async def ungroup_all(self) -> bool:
+        """Remove every follower so this player plays on its own again."""
+        sync = await self.get_sync_status()
+        if not sync or not sync.followers:
+            return True  # already standalone
+        ok = True
+        for follower in sync.followers:
+            ok = await self.remove_follower(follower.ip, follower.port) and ok
+        self._schedule_poll()
+        return ok
+
+    async def leave_group(self, leader: "BluOSPlayer") -> bool:
+        """Detach this player from its group by asking ``leader`` to drop it."""
+        ok = await leader.remove_follower(self.device.address, self.device.port)
+        if ok:
+            self._schedule_poll()
+            leader._schedule_poll()
+        return ok
+
+    async def is_grouped_with(self, target: "BluOSPlayer") -> bool:
+        """Whether ``target`` is currently a follower of this player (fresh check)."""
+        sync = await self.get_sync_status()
+        if not sync or not sync.followers:
+            return False
+        return any(f.ip == target.device.address and f.port == target.device.port for f in sync.followers)
 
     async def set_repeat(self, mode: RepeatMode) -> bool:
         """

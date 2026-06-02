@@ -138,11 +138,8 @@ don't invoke `pip`/`python` directly.
 ```bash
 git clone https://github.com/<owner>/uc-integration-bluos.git
 cd uc-integration-bluos
-devenv shell        # base CLI environment; prints the command summary
+devenv shell        # prints the command summary on entry
 ```
-
-For an editor/IDE setup with language servers, type checking and debugging,
-use the desktop profile defined in `devenv.desktop.nix`.
 
 ### Available commands
 

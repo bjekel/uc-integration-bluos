@@ -64,6 +64,42 @@ setup_flow.py    # setup wizard state machine (auto-discover or manual IP)
 
 **Browse/search:** XML responses from BluOS are parsed with ElementTree. `play_url` is cached by `browseKey` for items that are both browsable and playable. Search requires a `search_key` from the parent browse response.
 
+## Power Efficiency (must-follow)
+
+The UC Remote spends most of its life in a low-power sleep. **Every WebSocket
+message the integration pushes wakes it** — both `device_state` events and
+entity `attribute` updates. Keeping the Remote asleep is a primary design
+constraint, not a nice-to-have. On-hardware diagnostics showed per-poll
+`media_position` pushes alone were waking the Remote ~every 30s indefinitely
+during playback; eliminating them dropped a 6-minute playback window from ~12
+wakes to zero. Follow these rules:
+
+- **Never push an attribute on a fixed cadence.** If a value changes every poll
+  by nature (position, elapsed time, signal level, anything monotonic), do not
+  forward it each time. Push it only when the Remote genuinely needs it.
+- **`media_position` specifically:** the Remote interpolates the progress bar
+  itself between updates. Only push position on a forced resync, a track change,
+  a play/pause/stop transition, or an explicit skip/seek. The throttle lives in
+  `BluOSMediaPlayer.update_attributes`; keep `self.attributes` tracking the real
+  position so FAST_FORWARD/REWIND/SEEK math stays correct even when not pushed.
+- **Always diff before pushing.** Entities compute changed attributes against
+  `self.attributes` (the dict ucapi keeps in sync with the Remote) and the
+  driver only calls `update_attributes(entity_id, changed)` when `changed` is
+  non-empty. Never push a full attribute set unconditionally.
+- **Dedupe `device_state`.** Route all state changes through
+  `_set_device_state`, which suppresses redundant pushes of an unchanged state.
+- **Disconnect on standby.** `ENTER_STANDBY` must fully tear players down (close
+  the aiohttp session, stop volume/mute workers, cancel in-flight long-polls and
+  reconnect backoff) so nothing wakes the CPU or the Remote while asleep;
+  `EXIT_STANDBY` reconnects and forces a no-etag full refresh.
+- **New periodic attributes:** before adding any attribute that updates on every
+  poll, ask "does this wake the Remote each cycle?" If yes, throttle it the same
+  way — push only on meaningful change.
+- **Validate on hardware.** The `diagnostics/low-power-investigation` branch
+  carries `DIAG` instrumentation (push counters, `position_only_pushes`, task
+  snapshots). Use a build off that branch to confirm any power-related change
+  before release; `position_only_pushes` should stay ~0 during steady playback.
+
 ## Version Management
 
 When bumping the version, keep all three files in sync:

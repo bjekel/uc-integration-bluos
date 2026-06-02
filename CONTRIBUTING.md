@@ -20,7 +20,7 @@ development environment. **Always enter the devenv shell before running any
 project commands** — don't invoke `pip` or `python` directly outside of it.
 
 ```bash
-git clone https://github.com/<owner>/uc-integration-bluos.git
+git clone https://github.com/bjekel/uc-integration-bluos.git
 cd uc-integration-bluos
 devenv shell
 ```

@@ -136,7 +136,7 @@ environment. **Always enter the devenv shell before running project commands** â
 don't invoke `pip`/`python` directly.
 
 ```bash
-git clone https://github.com/<owner>/uc-integration-bluos.git
+git clone https://github.com/bjekel/uc-integration-bluos.git
 cd uc-integration-bluos
 devenv shell        # prints the command summary on entry
 ```

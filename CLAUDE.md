@@ -42,14 +42,15 @@ bluos.py         # pyblu wrapper — connection, events, playback, volume worker
 media_player.py  # UC MediaPlayer entity — command handling, state mapping, browse, grouping commands
 select_entity.py # UC Select entity — preset dropdown
 sensor_entity.py # UC Sensor entity — multi-room group membership state
+remote_entity.py # UC Remote entity — bindable command surface, delegates to media_player
 config.py        # device config dataclass, JSON persistence, device manager with callbacks
 discover.py      # mDNS discovery on _musc._tcp.local
 setup_flow.py    # setup wizard state machine (auto-discover or manual IP)
 ```
 
-**Data flow:** `driver.py` creates a `BluOSPlayer` (bluos.py) per device and listens to its events (`CONNECTED`, `DISCONNECTED`, `UPDATE`). It also creates the UC entities (`BluOSMediaPlayer`, `BluOSPresetSelect`) per device and routes incoming UC Remote commands to the appropriate player. A background poller task calls `player.poll_status()` using long-polling with etag support.
+**Data flow:** `driver.py` creates a `BluOSPlayer` (bluos.py) per device and listens to its events (`CONNECTED`, `DISCONNECTED`, `UPDATE`). It also creates the UC entities (`BluOSMediaPlayer`, `BluOSPresetSelect`, `BluOSGroupSensor`, `BluOSRemote`) per device and routes incoming UC Remote commands to the appropriate player. The `BluOSRemote` delegates command execution to the device's `BluOSMediaPlayer` so there is a single command-dispatch path. A background poller task calls `player.poll_status()` using long-polling with etag support.
 
-**State is module-level in driver.py:** `_configured_players`, `_entities`, `_select_entities`, `_sensor_entities`, `_devices`, `_REMOTE_IN_STANDBY`.
+**State is module-level in driver.py:** `_configured_players`, `_entities`, `_select_entities`, `_sensor_entities`, `_remote_entities`, `_devices`, `_REMOTE_IN_STANDBY`.
 
 **Multi-room grouping:** the media player exposes generated simple commands — `GROUP_TOGGLE_<room>` (toggle a room in/out of this player's group), `GROUP_ALL`, `UNGROUP_ALL`, `LEAVE_GROUP` — driven from the leader. `BluOSPlayer` caches `SyncStatus` on each poll and emits `group_role`/`group_leader`/`group_followers`, which the group sensor renders. Endpoint→room-name resolution uses the other configured players via an injected `_group_targets` accessor.
 

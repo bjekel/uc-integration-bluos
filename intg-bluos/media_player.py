@@ -212,6 +212,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         """Return the BluOS player wrapper."""
         return self._player
 
+    @property
+    def simple_commands(self) -> list[str]:
+        """Current preset/utility/grouping simple commands (excludes transport)."""
+        return list(self.options.get(Options.SIMPLE_COMMANDS, []))
+
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
         Compute entity attributes from a BluOS status update and return only

@@ -15,6 +15,7 @@ from bluos import Events as BluOSEvents
 from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
 from pyblu.errors import PlayerError, PlayerUnreachableError
+from remote_entity import BluOSRemote
 from select_entity import BluOSPresetSelect
 from sensor_entity import BluOSGroupSensor
 from ucapi import EntityTypes
@@ -36,12 +37,14 @@ _configured_players: dict[str, BluOSPlayer] = {}
 _entities: dict[str, BluOSMediaPlayer] = {}
 _select_entities: dict[str, BluOSPresetSelect] = {}
 _sensor_entities: dict[str, BluOSGroupSensor] = {}
+_remote_entities: dict[str, BluOSRemote] = {}
 _devices: Devices | None = None
 
 # Reverse maps for O(1) entity-id → device-id lookup in command handler and subscribe handler.
 _entity_id_to_device_id: dict[str, str] = {}
 _select_entity_id_to_device_id: dict[str, str] = {}
 _sensor_entity_id_to_device_id: dict[str, str] = {}
+_remote_entity_id_to_device_id: dict[str, str] = {}
 
 
 def _group_targets(device_id: str) -> list[BluOSPlayer]:
@@ -156,6 +159,17 @@ async def _add_player(device: BluOSDevice) -> None:
 
     _LOG.info("Registered group sensor entity: %s", sensor_entity.id)
 
+    # Create remote entity (control surface delegating to the media player)
+    remote_entity = BluOSRemote(device, player, entity)
+    _remote_entities[device.id] = remote_entity
+    _remote_entity_id_to_device_id[remote_entity.id] = device.id
+
+    if api.available_entities.contains(remote_entity.id):
+        api.available_entities.remove(remote_entity.id)
+    api.available_entities.add(remote_entity)
+
+    _LOG.info("Registered remote entity: %s", remote_entity.id)
+
     # Connect if not in standby
     if not _REMOTE_IN_STANDBY:
         await player.connect()
@@ -190,6 +204,14 @@ async def _remove_player(device_id: str) -> None:
             api.available_entities.remove(sensor_entity.id)
         if api.configured_entities.contains(sensor_entity.id):
             api.configured_entities.remove(sensor_entity.id)
+
+    if device_id in _remote_entities:
+        remote_entity = _remote_entities.pop(device_id)
+        _remote_entity_id_to_device_id.pop(remote_entity.id, None)
+        if api.available_entities.contains(remote_entity.id):
+            api.available_entities.remove(remote_entity.id)
+        if api.configured_entities.contains(remote_entity.id):
+            api.configured_entities.remove(remote_entity.id)
 
 
 def _any_player_connected() -> bool:
@@ -238,6 +260,14 @@ def _on_player_connected(device_id: str) -> None:
         entity.update_options()
         # Trigger initial status poll
         _LOOP.create_task(_poll_player(device_id))
+
+    # Refresh the remote's commands/UI (presets now loaded) and mark it on
+    if device_id in _remote_entities:
+        remote_entity = _remote_entities[device_id]
+        remote_entity.update_options()
+        changed = remote_entity.update_attributes({})
+        if changed:
+            api.configured_entities.update_attributes(remote_entity.id, changed)
 
     # Update select entity options now that presets are loaded
     if device_id in _select_entities:
@@ -294,6 +324,13 @@ def _on_player_disconnected(device_id: str) -> None:
         if changed:
             api.configured_entities.update_attributes(sensor_entity.id, changed)
 
+    # Set remote entity unavailable
+    if device_id in _remote_entities:
+        remote_entity = _remote_entities[device_id]
+        changed = remote_entity.set_unavailable()
+        if changed:
+            api.configured_entities.update_attributes(remote_entity.id, changed)
+
 
 def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
     """Handle player update event."""
@@ -319,6 +356,13 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         changed = sensor_entity.update_attributes(attributes)
         if changed:
             api.configured_entities.update_attributes(sensor_entity.id, changed)
+
+    # Update remote entity state
+    if device_id in _remote_entities:
+        remote_entity = _remote_entities[device_id]
+        changed = remote_entity.update_attributes(attributes)
+        if changed:
+            api.configured_entities.update_attributes(remote_entity.id, changed)
 
 
 async def _poll_player(device_id: str) -> None:
@@ -486,6 +530,8 @@ async def _on_exit_standby() -> None:
             _select_entities[device_id].clear_cached_attributes()
         if device_id in _sensor_entities:
             _sensor_entities[device_id].clear_cached_attributes()
+        if device_id in _remote_entities:
+            _remote_entities[device_id].clear_cached_attributes()
 
     # Parallel status refresh for all available players
     available_players = [(device_id, player) for device_id, player in _configured_players.items() if player.available]
@@ -534,6 +580,12 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
             # Push current group state; the next poll refreshes it.
             sensor_entity.clear_cached_attributes()
             api.configured_entities.update_attributes(sensor_entity.id, sensor_entity.attributes)
+            continue
+
+        if device_id := _remote_entity_id_to_device_id.get(entity_id):
+            remote_entity = _remote_entities[device_id]
+            remote_entity.clear_cached_attributes()
+            api.configured_entities.update_attributes(remote_entity.id, remote_entity.attributes)
 
 
 @api.listens_to(ucapi.Events.UNSUBSCRIBE_ENTITIES)

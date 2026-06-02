@@ -176,6 +176,71 @@ class TestBluOSMediaPlayer:
         assert Attributes.SOURCE_LIST in changed
         assert changed[Attributes.SOURCE_LIST] == ["input1", "preset:1", "preset:2"]
 
+    def test_update_attributes_position_only_throttled(self, entity, mock_player):
+        """A bare position advance during steady playback is not pushed.
+
+        media_position ticks up every poll; pushing it each time wakes the
+        Remote needlessly, so a position-only change is dropped from the diff.
+        """
+        # Baseline: title change carries position through.
+        entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "Song", "media_position": 30, "media_duration": 180}
+        )
+
+        # Next poll: only the position advanced.
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "Song", "media_position": 60, "media_duration": 180}
+        )
+
+        # Nothing is pushed, so the Remote stays asleep.
+        assert changed == {}
+        # ...but the entity still tracks the real position for seek math.
+        assert entity.attributes[Attributes.MEDIA_POSITION] == 60
+
+    def test_update_attributes_position_pushed_on_track_change(self, entity, mock_player):
+        """A track change carries the (reset) position through to the Remote."""
+        entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 100, "media_duration": 180}
+        )
+
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "B", "media_position": 0, "media_duration": 200}
+        )
+
+        assert changed[Attributes.MEDIA_TITLE] == "B"
+        assert changed[Attributes.MEDIA_POSITION] == 0
+
+    def test_update_attributes_position_pushed_on_state_change(self, entity, mock_player):
+        """A play/pause transition repositions the bar, so position is pushed."""
+        entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 30, "media_duration": 180}
+        )
+
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PAUSED, "media_title": "A", "media_position": 45, "media_duration": 180}
+        )
+
+        assert changed[Attributes.STATE] == States.PAUSED
+        assert changed[Attributes.MEDIA_POSITION] == 45
+
+    @pytest.mark.asyncio
+    async def test_update_attributes_position_pushed_after_skip(self, entity, mock_player):
+        """An explicit skip invalidates the cached position, forcing a push."""
+        mock_player.next_track = AsyncMock(return_value=True)
+        entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 100, "media_duration": 180}
+        )
+
+        # NEXT pops the cached position to force a refresh on the next poll.
+        await entity.command(Commands.NEXT, {})
+
+        # Same title/state, but the skip invalidated position -> push it anyway.
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 0, "media_duration": 180}
+        )
+
+        assert changed[Attributes.MEDIA_POSITION] == 0
+
     def test_set_unavailable(self, entity):
         """Test setting entity as unavailable."""
         # First set to playing

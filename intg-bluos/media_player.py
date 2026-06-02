@@ -275,6 +275,12 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             ):
                 computed[attr] = ""
 
+        # An explicit skip/seek command pops MEDIA_POSITION from self.attributes
+        # to force a refresh; capture that (and the forced-resync flag, which
+        # _diff_attributes consumes) before diffing.
+        position_invalidated = Attributes.MEDIA_POSITION not in self.attributes
+        force_full = self._force_update
+
         changed = self._diff_attributes(computed)
 
         # Force a position update on track change, even when the numeric value
@@ -283,6 +289,19 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             position = attributes.get("media_position")
             if position is not None:
                 changed[Attributes.MEDIA_POSITION] = position
+
+        # Progress-bar throttle: media_position advances on every poll, and
+        # pushing it each time needlessly wakes the Remote from low-power — the
+        # Remote interpolates the bar itself between updates. Drop a bare
+        # position advance so a position-only poll produces no push at all; only
+        # let it through when the Remote genuinely needs to reposition the bar:
+        # a forced resync, a track change, a play/pause/stop transition, or an
+        # explicit skip/seek. self.attributes still tracks the real position so
+        # FAST_FORWARD/REWIND/SEEK math stays correct.
+        if Attributes.MEDIA_POSITION in changed and not (
+            force_full or Attributes.MEDIA_TITLE in changed or Attributes.STATE in changed or position_invalidated
+        ):
+            self.attributes[Attributes.MEDIA_POSITION] = changed.pop(Attributes.MEDIA_POSITION)
 
         # Persist the diff locally so command handling and set_unavailable read
         # current state; the driver pushes `changed` to the Remote, which writes

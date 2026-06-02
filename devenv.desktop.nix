@@ -1,11 +1,14 @@
 { pkgs, lib, config, ... }:
 
+# Desktop/IDE development environment. Imports the base (CLI) devenv.nix and
+# layers IDE tooling on top. Use this profile when developing in an editor/IDE.
+
 {
   imports = [ ./devenv.nix ];
 
-  # VSCode-specific packages
+  # IDE / language-server packages
   packages = with pkgs; [
-    # Python language server for VSCode
+    # Python language server for editors
     python311Packages.python-lsp-server
     python311Packages.pylsp-mypy
     python311Packages.python-lsp-black
@@ -42,9 +45,7 @@ EOF
   '';
 
   enterShell = ''
-    echo "BluOS Integration - VSCode Development Environment"
-    echo "Run 'setup-vscode' to generate VSCode configuration"
-    echo "Commands: run, test, lint, format"
+    echo "Desktop/IDE extras loaded — run 'setup-vscode' to generate .vscode/settings.json"
     echo ""
   '';
 }

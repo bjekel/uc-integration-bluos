@@ -232,4 +232,23 @@ in
     black.enable = true;
     isort.enable = true;
   };
+
+  enterShell = ''
+    echo "BluOS Integration — development environment"
+    echo ""
+    echo "Available commands:"
+    echo "  run                          Run the integration locally"
+    echo "  test                         Run the test suite"
+    echo "  lint                         pylint + black + isort checks"
+    echo "  format                       Auto-format (black + isort)"
+    echo "  build                        PyInstaller build (host arch)"
+    echo "  package                      build + tarball (host arch)"
+    echo "  build-aarch64                PyInstaller build for ARM64 (Docker)"
+    echo "  package-aarch64              build-aarch64 + tarball"
+    echo "  clean                        Remove build artifacts"
+    echo "  setup-qemu                   Install QEMU arm64 emulation (x86-64 only)"
+    echo "  register-integration         Register driver with a local Remote/simulator"
+    echo "  register-integration-remote  Register driver with a remote device (UC_REMOTE_HOST/PIN)"
+    echo ""
+  '';
 }

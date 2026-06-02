@@ -1,0 +1,97 @@
+name: Release
+
+# Builds the aarch64 package and publishes a GitHub Release with the binary
+# attached. This workflow is intended to run ONLY on github.com — the source of
+# truth is elsewhere and this repo is a mirror. The `if:` guard on the job makes
+# Gitea Actions skip it, so it never runs as a duplicate upstream.
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  INTG_NAME: bluos
+  PYINSTALLER_TAG: "3.11.13"
+
+jobs:
+  release:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version matches driver.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/}
+          DRIVER_VERSION=$(jq -r '.version' driver.json)
+          if [ "$TAG_VERSION" != "$DRIVER_VERSION" ]; then
+            echo "Version mismatch: tag=$TAG_VERSION, driver.json=$DRIVER_VERSION"
+            exit 1
+          fi
+
+      - name: Set version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(jq -r '.version' driver.json)-dev.${{ github.run_number }}
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build with PyInstaller (aarch64)
+        run: |
+          docker buildx build --platform linux/arm64 \
+            --output type=local,dest=./dist \
+            -f - . <<'DOCKERFILE'
+          FROM docker.io/unfoldedcircle/r2-pyinstaller:${{ env.PYINSTALLER_TAG }} AS build
+          WORKDIR /src
+          COPY requirements.txt .
+          RUN pip install -r requirements.txt
+          COPY . .
+          RUN pyinstaller --clean --onedir \
+            --name driver \
+            --paths intg-bluos \
+            --add-data 'driver.json:.' \
+            intg-bluos/driver.py
+          FROM scratch
+          COPY --from=build /src/dist/driver/ /
+          DOCKERFILE
+
+      - name: Package artifact
+        run: |
+          mkdir -p artifacts
+          cd dist
+          mkdir -p bin
+          mv driver _internal bin/
+          cp ../driver.json .
+          cp ../LICENSE .
+          echo "${{ steps.version.outputs.version }}" > version.txt
+          tar -czf "../artifacts/uc-intg-${{ env.INTG_NAME }}-${{ steps.version.outputs.version }}-aarch64.tar.gz" .
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/checksums.txt
+          generate_release_notes: true

@@ -1,160 +1,235 @@
 # BluOS Integration for Unfolded Circle Remote
 
-A custom integration for the [Unfolded Circle Remote](https://www.unfoldedcircle.com/) that enables control of BluOS-enabled streaming players including Bluesound, NAD, and DALI devices.
+> ⚠️ **This project has been completely vibe-coded.**
+> Every line — code, tests, and this README — was written by an AI assistant
+> through conversational prompting, with no line-by-line human authoring. It
+> works for the author's own devices, but it has **not** been formally reviewed
+> or audited. Use it at your own risk, and validate behaviour against your own
+> hardware before relying on it.
+
+A custom integration for the [Unfolded Circle Remote](https://www.unfoldedcircle.com/)
+(Remote Two / Remote 3) that controls BluOS-enabled streaming players —
+Bluesound, NAD, and DALI devices.
+
+It runs as a WebSocket server (port `9300`) built on the
+[`ucapi`](https://github.com/unfoldedcircle/integration-python-library) library
+and talks to players through [`pyblu`](https://github.com/LouisChrist/pyblu).
+
+---
 
 ## Features
 
-- **Media Player Control**: Play, pause, stop, next/previous track, seek
-- **Volume Control**: Set volume, volume up/down, mute/unmute
-- **Source Selection**: Switch between inputs and presets
-- **Shuffle & Repeat**: Toggle shuffle mode, cycle through repeat modes (off/all/one)
-- **Sleep Timer**: Toggle through preset sleep timer values (15/30/45/60/90 minutes)
-- **Preset Management**: Quick access to saved presets via simple commands
-- **Multi-room Support**: Group/ungroup players (API available)
-- **Auto-discovery**: Automatic discovery of BluOS devices on the local network via mDNS
-- **Fast Status Updates**: Long-polling for real-time playback state updates
+### Media player
+- **Transport:** play / pause, stop, next / previous, fast-forward, rewind, seek
+- **Power:** on / off / toggle (play-pause based)
+- **Volume:** set level, up / down, mute / unmute / toggle
+- **Metadata:** title, artist, album, cover art, duration, live position
+- **Modes:** shuffle, repeat (off → all → one)
+- **Sources:** select inputs and presets
+- **Browse & search:** navigate the BluOS music library and play items directly
+  (`browse_media`, `search_media`, `play_media`), plus clear playlist
+
+### Presets (Select entity)
+A dropdown of the player's saved presets for quick recall.
+
+### Multi-room grouping
+Leader-driven grouping exposed as simple commands (see below). A dedicated
+**group sensor** entity shows each player's role (leader / follower / standalone),
+the group leader, and its followers.
+
+### Remote entity
+A bindable command surface that delegates to the media player, so grouping and
+playback commands can be mapped to buttons and used in activities/macros.
+
+### Other
+- **Auto-discovery** of BluOS devices via mDNS (`_musc._tcp.local`)
+- **Fast updates** via long-polling with ETag support
+- **Power-efficient:** the integration avoids needlessly waking the Remote
+  (no fixed-cadence attribute pushes) and fully disconnects players on standby
+
+---
+
+## Supported devices
+
+Any BluOS-enabled device should work, including:
+
+- **Bluesound:** NODE, POWERNODE, PULSE, VAULT
+- **NAD:** M10, M33, C 658, C 700, T 758 V3i
+- **DALI:** CALLISTO, SOUND HUB, OBERON C
+- Other BluOS-based players
+
+---
 
 ## Installation
 
-### From Release Package
+### On the Remote (from a release package)
 
-1. Download the latest release package from the releases page
-2. Upload to your Unfolded Circle Remote via the web interface
-3. Configure devices through the setup flow
+1. Download the latest `uc-intg-bluos-<version>-aarch64.tar.gz` from the
+   releases page.
+2. Upload it to your Remote via the web configurator
+   (**Integrations → Install custom**).
+3. Run the setup flow to add your devices.
 
-### From Source (Development)
+### Setup flow
 
-```bash
-# Clone the repository
-git clone https://github.com/your-repo/uc-integration-bluos.git
-cd uc-integration-bluos
+When configuring, choose one of:
 
-# Install dependencies (using devenv or pip)
-pip install -e ".[test]"
+- **Discover devices automatically** — finds BluOS players on your network via mDNS.
+- **Enter IP address manually** — for players that don't discover cleanly.
 
-# Run the integration
-python intg-bluos/driver.py
-```
+---
+
+## Simple commands
+
+Usable in activities and macros, exposed on the media player / remote entity:
+
+| Command | Description |
+|---|---|
+| `PRESET_1`, `PRESET_2`, … | Load a saved preset by its number |
+| `REFRESH_PRESETS` | Re-read the preset list from the device |
+| `SHUFFLE_TOGGLE` | Toggle shuffle |
+| `REPEAT_TOGGLE` | Cycle repeat: off → all → one |
+| `SLEEP_TIMER` | Cycle sleep timer: 15 → 30 → 45 → 60 → 90 → off (minutes) |
+
+### Grouping commands
+
+These are generated on the **leader** player. `GROUP_TOGGLE_<room>` is created
+per other configured player, using that player's name:
+
+| Command | Description |
+|---|---|
+| `GROUP_TOGGLE_<room>` | Add/remove that room from this player's group |
+| `GROUP_ALL` | Group all configured players under this leader |
+| `UNGROUP_ALL` | Disband this player's group |
+| `LEAVE_GROUP` | Make this player leave the group it belongs to |
+
+---
 
 ## Configuration
 
-### Device Configuration
+Each device stores the following (defaults shown). These are persisted in
+`config.json` under `UC_CONFIG_HOME`:
 
-Devices can be configured via:
-1. **Auto-discovery**: The integration will automatically discover BluOS devices on your network
-2. **Manual entry**: Enter the IP address of your BluOS device manually
+| Field | Default | Description |
+|---|---|---|
+| `address` | — | IP address of the BluOS device |
+| `port` | `11000` | BluOS API port |
+| `volume_step` | `5` | Step size for volume up/down |
+| `timeout` | `5.0` | Connection timeout (seconds) |
+| `standby_timeout` | `60` | Long-poll timeout while the Remote is in standby |
+| `active_poll_timeout` | `30` | Long-poll timeout while active |
+| `model` | — | Device model (informational) |
 
-### Configuration Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `address` | - | IP address of the BluOS device |
-| `port` | 11000 | Port number (default BluOS API port) |
-| `volume_step` | 5 | Volume increment/decrement step (1-20) |
-| `timeout` | 5.0 | Connection timeout in seconds |
-| `standby_timeout` | 60 | Long-poll timeout during standby |
-
-### Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `UC_CONFIG_HOME` | `./data` | Directory for configuration storage |
-| `UC_LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+|---|---|---|
+| `UC_CONFIG_HOME` | `./data` | Directory for `config.json` |
+| `UC_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
-## Supported Devices
-
-This integration supports any BluOS-enabled device, including:
-
-- **Bluesound**: NODE, POWERNODE, PULSE, VAULT
-- **NAD**: M10, M33, C 658, C 700, T 758 V3i
-- **DALI**: CALLISTO, SOUND HUB, OBERON C
-- Other BluOS-enabled devices
-
-## Simple Commands
-
-The integration exposes several simple commands for use with macros:
-
-| Command | Description |
-|---------|-------------|
-| `PRESET_1`, `PRESET_2`, ... | Load preset by number |
-| `REFRESH_PRESETS` | Refresh the list of available presets |
-| `SHUFFLE_TOGGLE` | Toggle shuffle mode |
-| `REPEAT_TOGGLE` | Cycle repeat mode (OFF -> ALL -> ONE -> OFF) |
-| `SLEEP_TIMER` | Toggle sleep timer (15 -> 30 -> 45 -> 60 -> 90 -> OFF) |
+---
 
 ## Development
 
-### Running Tests
+This project uses [devenv](https://devenv.sh) (Nix-based) for a reproducible
+environment. **Always enter the devenv shell before running project commands** —
+don't invoke `pip`/`python` directly.
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=intg-bluos
-
-# Run specific test file
-pytest tests/test_bluos.py
+git clone https://github.com/<owner>/uc-integration-bluos.git
+cd uc-integration-bluos
+devenv shell        # base CLI environment; prints the command summary
 ```
 
-### Code Style
+For an editor/IDE setup with language servers, type checking and debugging,
+use the desktop profile defined in `devenv.desktop.nix`.
 
-The project uses:
-- **Black** for code formatting (line length: 120)
-- **isort** for import sorting
-- **Pylint** for linting
+### Available commands
+
+Printed on shell entry:
+
+| Command | Description |
+|---|---|
+| `run` | Run the integration locally |
+| `test` | Run the test suite (`pytest tests/ -v`) |
+| `lint` | pylint + black + isort checks |
+| `format` | Auto-format (black + isort) |
+| `build` | PyInstaller build (host arch) |
+| `package` | `build` + tarball (host arch) |
+| `build-aarch64` | PyInstaller build for ARM64 via Docker |
+| `package-aarch64` | `build-aarch64` + tarball |
+| `clean` | Remove build artifacts |
+| `setup-qemu` | Install QEMU arm64 emulation (x86-64 hosts only) |
+| `register-integration` | Register the driver with a local Remote/simulator |
+| `register-integration-remote` | Register with a remote device (`UC_REMOTE_HOST` / `UC_REMOTE_PIN`) |
+
+### Running tests
 
 ```bash
-# Format code
-black intg-bluos tests
-isort intg-bluos tests
+test                                              # whole suite
+pytest tests/test_media_player.py -v              # one file
+pytest tests/test_bluos.py::TestBluOSPlayer::test_volume_up -v
 ```
 
-### Building
+Outside devenv, set `PYTHONPATH=intg-bluos` first.
 
-```bash
-# Build with PyInstaller
-pyinstaller --onefile intg-bluos/driver.py
-```
+---
 
 ## Architecture
 
 ```
 intg-bluos/
-├── driver.py          # Main entry point and UC API integration
-├── bluos.py           # BluOS player wrapper with event emission
-├── media_player.py    # UC media player entity implementation
-├── select_entity.py   # UC select entity for preset selection
-├── config.py          # Device configuration management
-├── discover.py        # mDNS discovery for BluOS devices
-└── setup_flow.py      # Device setup flow handler
+├── driver.py        # entry point: UC WebSocket server + background poller
+├── bluos.py         # pyblu wrapper: connection, events, playback, volume/mute
+│                    #   workers, browse/search, grouping/sync-status
+├── media_player.py  # MediaPlayer entity: commands, state mapping, grouping
+├── select_entity.py # Select entity: preset dropdown
+├── sensor_entity.py # Sensor entity: multi-room group membership
+├── remote_entity.py # Remote entity: bindable commands → media player
+├── config.py        # device config dataclass + JSON persistence + manager
+├── discover.py      # mDNS discovery (_musc._tcp.local)
+└── setup_flow.py    # setup wizard (auto-discover or manual IP)
 ```
+
+**Data flow:** `driver.py` creates one `BluOSPlayer` per device, listens to its
+`CONNECTED` / `DISCONNECTED` / `UPDATE` events, and creates the matching UC
+entities. A background task long-polls each player for status. Volume and mute
+commands flow through an `asyncio.Queue` worker for sequential, debounced API
+calls. Entities only push attributes to the Remote when values actually change,
+to keep the Remote asleep as much as possible.
+
+---
 
 ## Troubleshooting
 
-### Device Not Discovered
+**Device not discovered**
+- Ensure the player and Remote are on the same network/subnet.
+- Check that mDNS/Bonjour isn't blocked by your router.
+- Fall back to manual IP entry.
 
-- Ensure your BluOS device and Remote are on the same network
-- Check that mDNS/Bonjour is not blocked by your router
-- Try manual IP entry as a workaround
+**Connection issues**
+- Verify the device is powered on and reachable.
+- Confirm its IP hasn't changed (consider a DHCP reservation).
+- Increase `timeout` on slow networks.
 
-### Connection Issues
+**State not updating**
+- Updates arrive via long-polling within seconds.
+- Set `UC_LOG_LEVEL=DEBUG` for detail.
 
-- Verify the device is powered on and connected to the network
-- Check the device's IP address hasn't changed
-- Increase the timeout value if you have a slow network
+**Volume jumps unexpectedly when grouped**
+- BluOS reports a grouped player's own volume as `-1` and the real level via
+  group volume; the integration handles this — make sure you're on a recent
+  version.
 
-### Playback State Not Updating
-
-- The integration uses long-polling; updates should appear within seconds
-- Check the UC_LOG_LEVEL for error messages
-- Restart the integration if issues persist
+---
 
 ## License
 
-This project is licensed under the Mozilla Public License 2.0 (MPL-2.0).
+Licensed under the **Mozilla Public License 2.0 (MPL-2.0)** — the same license
+used by the official Unfolded Circle integrations and the `ucapi` library. See
+[`LICENSE`](LICENSE).
 
 ## Acknowledgments
 
-- [pyblu](https://github.com/LouisChrist/pyblu) - Python library for BluOS API
-- [Unfolded Circle](https://www.unfoldedcircle.com/) - For the Remote and integration SDK
+- [pyblu](https://github.com/LouisChrist/pyblu) — Python BluOS API client
+- [Unfolded Circle](https://www.unfoldedcircle.com/) — the Remote and integration SDK

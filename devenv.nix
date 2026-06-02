@@ -161,8 +161,8 @@ in
         DRIVER_URL="ws://$IP:$PORT"
         echo "Registering integration with driver_url: $DRIVER_URL"
 
-        curl --location 'http://localhost:8080/api/intg/drivers' \
-          --user "web-configurator:REDACTED" \
+        curl --location "http://''${UC_REMOTE_HOST:-localhost:8080}/api/intg/drivers" \
+          --user "web-configurator:''${UC_REMOTE_PIN:-1234}" \
           --header 'Content-Type: application/json' \
           --data "$(jq -n \
             --arg driver_url "$DRIVER_URL" \
@@ -201,8 +201,11 @@ in
         DRIVER_URL="ws://$IP:$PORT"
         echo "Registering integration with driver_url: $DRIVER_URL"
 
-        curl --location 'http://REDACTED-HOST/api/intg/drivers' \
-          --user "web-configurator:REDACTED" \
+        REMOTE_HOST="''${UC_REMOTE_HOST:?set UC_REMOTE_HOST to your Remote's IP or hostname}"
+        REMOTE_PIN="''${UC_REMOTE_PIN:?set UC_REMOTE_PIN to the web-configurator PIN}"
+
+        curl --location "http://$REMOTE_HOST/api/intg/drivers" \
+          --user "web-configurator:$REMOTE_PIN" \
           --header 'Content-Type: application/json' \
           --data "$(jq -n \
             --arg driver_url "$DRIVER_URL" \

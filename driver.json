@@ -13,10 +13,8 @@
   },
   "port": 9300,
   "developer": {
-    "name": "Bart",
-    "url": "https://REDACTED.invalid/bart/uc-integration-bluos"
+    "name": "Bart"
   },
-  "home_page": "https://REDACTED.invalid/bart/uc-integration-bluos",
   "setup_data_schema": {
     "title": {
       "en": "BluOS Integration",

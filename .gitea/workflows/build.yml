@@ -130,14 +130,16 @@ jobs:
           REPO="${{ github.repository }}"
           AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
 
+          API="${{ github.server_url }}/api/v1"
+
           RELEASE_ID=$(curl -sf \
-            "https://REDACTED.invalid/api/v1/repos/${REPO}/releases/tags/${TAG}" \
+            "${API}/repos/${REPO}/releases/tags/${TAG}" \
             -H "$AUTH" | jq -r '.id // empty')
 
           if [ -z "$RELEASE_ID" ]; then
             echo "No existing release for ${TAG} — creating one."
             RELEASE_ID=$(curl -sf -X POST \
-              "https://REDACTED.invalid/api/v1/repos/${REPO}/releases" \
+              "${API}/repos/${REPO}/releases" \
               -H "$AUTH" -H "Content-Type: application/json" \
               -d "{\"tag_name\": \"${TAG}\", \"name\": \"${TAG}\"}" \
               | jq -r '.id')
@@ -146,6 +148,6 @@ jobs:
           echo "Uploading assets to release ${RELEASE_ID}"
           for f in artifacts/*.tar.gz artifacts/checksums.txt; do
             curl -sf -X POST \
-              "https://REDACTED.invalid/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets" \
+              "${API}/repos/${REPO}/releases/${RELEASE_ID}/assets" \
               -H "$AUTH" -F "attachment=@${f}"
           done

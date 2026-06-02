@@ -3,7 +3,7 @@
 import hashlib
 import logging
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Callable
 
 import ucapi
 from bluos import BluOSPlayer
@@ -51,6 +51,13 @@ _REPEAT_COMMAND_MAP: dict[RepeatMode, BluOSRepeatMode] = {
     RepeatMode.ALL: BluOSRepeatMode.ALL,
     RepeatMode.ONE: BluOSRepeatMode.ONE,
 }
+
+# Multi-room grouping simple commands. GROUP_TOGGLE_<room name> is generated per
+# other configured player and toggles that room in/out of this player's group.
+GROUP_TOGGLE_PREFIX = "GROUP_TOGGLE_"
+GROUP_ALL_CMD = "GROUP_ALL"
+UNGROUP_ALL_CMD = "UNGROUP_ALL"
+LEAVE_GROUP_CMD = "LEAVE_GROUP"
 
 # Features supported by BluOS players
 BLUOS_FEATURES = [
@@ -143,6 +150,7 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self,
         device: BluOSDevice,
         player: BluOSPlayer,
+        group_targets: Callable[[], list[BluOSPlayer]] | None = None,
     ):
         """
         Initialize BluOS media player entity.
@@ -150,12 +158,19 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         Args:
             device: Device configuration
             player: BluOS player wrapper
+            group_targets: Callable returning the other configured players that
+                this player can be grouped with. Used to generate the per-room
+                GROUP_TOGGLE_* simple commands. Defaults to no targets.
         """
         entity_id = f"bluos_{device.id}"
         name = device.name
 
-        # Build options with simple commands for presets
-        options = {Options.SIMPLE_COMMANDS: player.get_simple_commands()}
+        # group_targets must be set before building options, which include the
+        # per-room grouping commands derived from the other configured players.
+        self._group_targets = group_targets
+
+        # Build options with simple commands for presets and grouping
+        options = {Options.SIMPLE_COMMANDS: self._build_simple_commands(player)}
 
         super().__init__(
             entity_id,
@@ -301,8 +316,83 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
     def update_options(self) -> dict[str, Any]:
         """Update and return entity options with current simple commands."""
-        self.options = {Options.SIMPLE_COMMANDS: self._player.get_simple_commands()}
+        self.options = {Options.SIMPLE_COMMANDS: self._build_simple_commands(self._player)}
         return self.options
+
+    def _build_simple_commands(self, player: BluOSPlayer) -> list[str]:
+        """Combine the player's preset/utility commands with grouping commands."""
+        return player.get_simple_commands() + self._grouping_commands()
+
+    def _get_targets(self) -> list[BluOSPlayer]:
+        """Other configured players this one can be grouped with."""
+        return list(self._group_targets()) if self._group_targets else []
+
+    def _grouping_commands(self) -> list[str]:
+        """Generate the multi-room grouping simple commands."""
+        targets = self._get_targets()
+        commands = [f"{GROUP_TOGGLE_PREFIX}{target.device.name}" for target in targets]
+        if targets:
+            commands.append(GROUP_ALL_CMD)
+        commands.append(UNGROUP_ALL_CMD)
+        commands.append(LEAVE_GROUP_CMD)
+        return commands
+
+    def _find_target_by_name(self, name: str) -> BluOSPlayer | None:
+        """Resolve a room name to one of the groupable target players."""
+        for target in self._get_targets():
+            if target.device.name == name:
+                return target
+        return None
+
+    def _find_target_by_endpoint(self, ip: str, port: int) -> BluOSPlayer | None:
+        """Resolve an ip:port endpoint to one of the groupable target players."""
+        for target in self._get_targets():
+            if target.device.address == ip and target.device.port == port:
+                return target
+        return None
+
+    async def _handle_group_command(self, cmd_id: str) -> ucapi.StatusCodes | None:
+        """
+        Handle a multi-room grouping command.
+
+        Returns a status code if ``cmd_id`` is a grouping command, or None if it
+        is not (so the caller can continue normal dispatch).
+        """
+        if cmd_id == GROUP_ALL_CMD:
+            ok = True
+            for target in self._get_targets():
+                if target.available:
+                    ok = await self._player.group_with(target) and ok
+            return ucapi.StatusCodes.OK if ok else ucapi.StatusCodes.SERVER_ERROR
+
+        if cmd_id == UNGROUP_ALL_CMD:
+            ok = await self._player.ungroup_all()
+            return ucapi.StatusCodes.OK if ok else ucapi.StatusCodes.SERVER_ERROR
+
+        if cmd_id == LEAVE_GROUP_CMD:
+            sync = self._player.sync_status
+            if not sync or not sync.leader:
+                return ucapi.StatusCodes.OK  # not a follower, nothing to do
+            leader = self._find_target_by_endpoint(sync.leader.ip, sync.leader.port)
+            if leader is None:
+                _LOG.warning("LEAVE_GROUP: leader %s is not managed by this integration", sync.leader.ip)
+                return ucapi.StatusCodes.SERVICE_UNAVAILABLE
+            ok = await self._player.leave_group(leader)
+            return ucapi.StatusCodes.OK if ok else ucapi.StatusCodes.SERVER_ERROR
+
+        if cmd_id.startswith(GROUP_TOGGLE_PREFIX):
+            room = cmd_id[len(GROUP_TOGGLE_PREFIX) :]
+            target = self._find_target_by_name(room)
+            if target is None:
+                _LOG.warning("GROUP_TOGGLE: unknown room '%s'", room)
+                return ucapi.StatusCodes.BAD_REQUEST
+            if await self._player.is_grouped_with(target):
+                ok = await self._player.ungroup(target)
+            else:
+                ok = await self._player.group_with(target)
+            return ucapi.StatusCodes.OK if ok else ucapi.StatusCodes.SERVER_ERROR
+
+        return None
 
     @staticmethod
     def _map_state(bluos_state: BluOSStates) -> States:
@@ -487,6 +577,11 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
             new_timer = await self._player.toggle_sleep_timer()
             _LOG.info("Sleep timer set to %d minutes", new_timer)
             return ucapi.StatusCodes.OK
+
+        # Handle multi-room grouping commands
+        group_result = await self._handle_group_command(cmd_id)
+        if group_result is not None:
+            return group_result
 
         result = False
 

@@ -1044,6 +1044,53 @@ class TestBluOSPlayer:
             mock_pyblu_player.volume.assert_called_with(level=45)
 
     @pytest.mark.asyncio
+    async def test_volume_step_when_grouped_uses_group_volume(self, player):
+        """Regression for issue #3: a grouped player reports volume == -1 and the
+        real level in group_volume. Relative volume must step from group_volume,
+        not collapse to 0."""
+        mock_pyblu_player = MagicMock()
+        mock_pyblu_player.sync_status = AsyncMock()
+        mock_pyblu_player.inputs = AsyncMock(return_value=[])
+        mock_pyblu_player.presets = AsyncMock(return_value=[])
+        mock_pyblu_player.volume = AsyncMock()
+
+        mock_status = MagicMock()
+        mock_status.etag = "test-etag"
+        mock_status.state = "play"
+        mock_status.volume = -1  # BluOS sentinel for grouped/fixed-volume players
+        mock_status.group_volume = 30
+        mock_status.mute = False
+        mock_status.name = ""
+        mock_status.artist = ""
+        mock_status.album = ""
+        mock_status.image = ""
+        mock_status.total_seconds = 0
+        mock_status.seconds = 0
+        mock_status.shuffle = False
+        mock_status.input_id = ""
+        mock_status.sleep = 0
+        mock_pyblu_player.status = AsyncMock(return_value=mock_status)
+
+        with patch("bluos.Player", return_value=mock_pyblu_player):
+            await player.connect()
+            await player.poll_status(use_etag=False)
+
+            # The cached/displayed volume must be the group volume, never -1.
+            assert player._last_known_volume == 30
+            attrs = player._status_to_attributes(mock_status)
+            assert attrs["volume"] == 30
+
+            await player.volume_down()
+            await player._volume_queue.join()
+            # 30 - 5 = 25, NOT 0
+            mock_pyblu_player.volume.assert_called_with(level=25)
+
+            await player.volume_up()
+            await player._volume_queue.join()
+            # 25 + 5 = 30
+            mock_pyblu_player.volume.assert_called_with(level=30)
+
+    @pytest.mark.asyncio
     async def test_refresh_presets(self, player):
         """Test refresh presets command."""
         mock_pyblu_player = MagicMock()

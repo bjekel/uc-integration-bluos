@@ -505,20 +505,28 @@ class BluOSPlayer:
         # Update sleep timer from status
         self._sleep_timer = status.sleep or 0
 
+        # Resolve a usable 0-100 level. BluOS reports volume == -1 for a player
+        # that is part of a group (or has fixed output); the real level then
+        # lives in group_volume. Caching -1 would make relative volume_up/down
+        # step from -1 and collapse to 0 (see issue #3).
+        effective_volume = status.volume
+        if effective_volume is None or effective_volume < 0:
+            effective_volume = status.group_volume
+
         # Cache raw device values so commands can use them without an extra status() call
-        if status.volume is not None:
-            self._last_known_volume = status.volume
+        if effective_volume is not None and effective_volume >= 0:
+            self._last_known_volume = effective_volume
         if status.mute is not None:
             self._last_known_mute = status.mute
 
         # Volume debouncing - use target if recently set to prevent UI jitter
-        volume = status.volume
+        volume = effective_volume if effective_volume is not None and effective_volume >= 0 else self._last_known_volume
         if self._target_volume is not None:
             if self._last_volume_update is not None:
                 if (time.time() - self._last_volume_update) * 1000 < self._volume_debounce_ms:
                     volume = self._target_volume
             # Clear target if device caught up
-            if status.volume == self._target_volume:
+            if effective_volume == self._target_volume:
                 self._target_volume = None
                 self._last_volume_update = None
 

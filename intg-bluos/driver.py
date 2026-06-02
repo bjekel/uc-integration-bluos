@@ -52,6 +52,30 @@ def _group_targets(device_id: str) -> list[BluOSPlayer]:
     return [player for did, player in _configured_players.items() if did != device_id]
 
 
+def _refresh_grouping_options() -> None:
+    """Rebuild simple-command options for every media player and remote entity.
+
+    The per-room ``GROUP_TOGGLE_*`` and ``GROUP_ALL`` commands are derived from
+    the *other* configured players, so whenever the set of configured devices
+    changes, every existing entity's options must be regenerated -- not just the
+    one being added/removed. Without this, the first-configured device never
+    gains grouping commands for devices added afterwards, because its options
+    were built when it was the only player.
+
+    Entities are shared by reference with ``available_entities``, so mutating
+    ``self.options`` here is enough for ``get_all()`` to serve the refreshed
+    list on the next (re)subscribe. The Remote still has to re-read the entity
+    definition (re-add the entity / re-run setup) to surface newly added simple
+    commands. The remote entity borrows the media player's command list, so the
+    media player must be refreshed first.
+    """
+    for device_id, entity in _entities.items():
+        entity.update_options()
+        remote_entity = _remote_entities.get(device_id)
+        if remote_entity is not None:
+            remote_entity.update_options()
+
+
 # Remote state
 _REMOTE_IN_STANDBY = False
 
@@ -170,6 +194,10 @@ async def _add_player(device: BluOSDevice) -> None:
 
     _LOG.info("Registered remote entity: %s", remote_entity.id)
 
+    # The newly added device is now a grouping target for every previously
+    # configured player, so regenerate all entities' simple commands.
+    _refresh_grouping_options()
+
     # Connect if not in standby
     if not _REMOTE_IN_STANDBY:
         await player.connect()
@@ -212,6 +240,10 @@ async def _remove_player(device_id: str) -> None:
             api.available_entities.remove(remote_entity.id)
         if api.configured_entities.contains(remote_entity.id):
             api.configured_entities.remove(remote_entity.id)
+
+    # The removed device is no longer a grouping target for the remaining
+    # players, so regenerate the surviving entities' simple commands.
+    _refresh_grouping_options()
 
 
 def _any_player_connected() -> bool:

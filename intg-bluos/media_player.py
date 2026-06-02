@@ -345,7 +345,17 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
     def _build_simple_commands(self, player: BluOSPlayer) -> list[str]:
         """Combine the player's preset/utility commands with grouping commands."""
-        return player.get_simple_commands() + self._grouping_commands()
+        commands = player.get_simple_commands() + self._grouping_commands()
+        if _LOG.isEnabledFor(logging.DEBUG):
+            targets = self._get_targets()
+            _LOG.debug(
+                "Simple commands for %s: %d group target(s) %s -> %s",
+                player.device.name,
+                len(targets),
+                [t.device.name for t in targets],
+                commands,
+            )
+        return commands
 
     def _get_targets(self) -> list[BluOSPlayer]:
         """Other configured players this one can be grouped with."""

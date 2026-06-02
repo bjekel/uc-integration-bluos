@@ -206,3 +206,51 @@ class TestDeviceStateDedup:
 
         # Reset happened, so the post-connect _update_device_state pushed afresh.
         assert driver_state.set_device_state.await_count >= 1
+
+
+class TestGroupingOptionsRefresh:
+    """Regression: a device added later must appear as a grouping target on the
+    devices configured before it.
+
+    The first-configured device's media player is built when it is the only
+    player, so its options start without GROUP_TOGGLE_*/GROUP_ALL. Refreshing all
+    entities when the device set changes is what repairs that.
+    """
+
+    @staticmethod
+    def _player(device_id, name, ip):
+        from bluos import BluOSPlayer
+        from config import BluOSDevice
+
+        player = MagicMock(spec=BluOSPlayer)
+        player.available = True
+        player.get_simple_commands.return_value = ["PRESET_1"]
+        player.device = BluOSDevice(id=device_id, name=name, address=ip)
+        return player
+
+    def _add(self, device_id, name, ip):
+        from media_player import BluOSMediaPlayer
+
+        player = self._player(device_id, name, ip)
+        driver._configured_players[device_id] = player
+        entity = BluOSMediaPlayer(player.device, player, lambda did=device_id: driver._group_targets(did))
+        driver._entities[device_id] = entity
+        return entity
+
+    def test_first_device_gains_grouping_when_second_added(self, driver_state):
+        from media_player import GROUP_ALL_CMD, GROUP_TOGGLE_PREFIX
+
+        # First device configured alone — built with no group targets.
+        entity1 = self._add("living", "Living Room", "192.168.1.10")
+        assert GROUP_ALL_CMD not in entity1.simple_commands
+        assert not any(c.startswith(GROUP_TOGGLE_PREFIX) for c in entity1.simple_commands)
+
+        # Second device added later, then options refreshed (as _add_player does).
+        entity2 = self._add("kitchen", "Kitchen", "192.168.1.11")
+        driver._refresh_grouping_options()
+
+        # Both now expose grouping toggles for each other plus GROUP_ALL.
+        assert f"{GROUP_TOGGLE_PREFIX}Kitchen" in entity1.simple_commands
+        assert GROUP_ALL_CMD in entity1.simple_commands
+        assert f"{GROUP_TOGGLE_PREFIX}Living Room" in entity2.simple_commands
+        assert GROUP_ALL_CMD in entity2.simple_commands

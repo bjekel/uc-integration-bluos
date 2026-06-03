@@ -130,7 +130,10 @@ jobs:
           REPO="${{ github.repository }}"
           AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
 
-          API="${{ github.server_url }}/api/v1"
+          # server_url may carry a trailing slash (Gitea ROOT_URL convention);
+          # strip it so the API base isn't https://host//api/v1 (which 404s).
+          SERVER_URL="${{ github.server_url }}"
+          API="${SERVER_URL%/}/api/v1"
 
           RELEASE_ID=$(curl -sf \
             "${API}/repos/${REPO}/releases/tags/${TAG}" \

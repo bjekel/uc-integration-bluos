@@ -1,6 +1,6 @@
 {
   "driver_id": "bluos",
-  "version": "0.17.2",
+  "version": "0.17.3",
   "min_core_api": "0.20.0",
   "name": {
     "en": "BluOS Streaming Players",
@@ -51,5 +51,5 @@
       }
     ]
   },
-  "release_date": "2026-06-02"
+  "release_date": "2026-06-03"
 }

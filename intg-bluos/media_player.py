@@ -203,6 +203,8 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
         self._play_url_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
         # Maps short hash ID → full browse key for keys that exceed the 255-char media_id limit
         self._browse_id_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
+        # Maps synthetic ID → list[BrowseMediaItem] for items with inline sub-items but no browse_key
+        self._inline_items_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
 
     @property
     def player(self) -> BluOSPlayer:
@@ -456,13 +458,22 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
         if "items" in item and item["items"]:
             sub_items = [self._bluos_item_to_browse_item(sub) for sub in item["items"]]
 
+        # Items with inline sub-items but no browse_key (e.g. Radio Paradise quality tiers):
+        # synthesize a stable ID, cache the children, and mark the item as browsable.
+        can_browse = browse_key is not None
+        if sub_items and not can_browse and not play_url:
+            synthetic_id = "_il_" + hashlib.sha256(item.get("text", "").encode()).hexdigest()[:16]
+            self._inline_items_cache[synthetic_id] = sub_items
+            media_id = synthetic_id
+            can_browse = True
+
         text2 = item.get("text2")
         return BrowseMediaItem(
             title=item.get("text", "")[:255],
             media_class=media_class,
             media_type=media_type,
             media_id=media_id,
-            can_browse=browse_key is not None,
+            can_browse=can_browse,
             can_play=play_url is not None,
             subtitle=text2[:255] if text2 else None,
             thumbnail=thumbnail,
@@ -472,6 +483,22 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
     async def browse(self, options: BrowseOptions) -> BrowseResults | StatusCodes:
         """Browse BluOS music content."""
         _LOG.debug("Browse request: media_id=%s, paging=%s", options.media_id, options.paging)
+
+        # Inline-items cache: items whose children were pre-embedded in the parent response
+        cached_inline = self._inline_items_cache.get(options.media_id)
+        if cached_inline is not None:
+            container = BrowseMediaItem(
+                title=options.media_id,
+                media_class="directory",
+                media_type="music",
+                media_id=options.media_id,
+                can_browse=True,
+                items=cached_inline,
+            )
+            return BrowseResults(
+                media=container,
+                pagination=Pagination(page=1, limit=len(cached_inline), count=len(cached_inline)),
+            )
 
         browse_key = self._browse_id_cache.get(options.media_id, options.media_id)
         raw = await self._player.browse(key=browse_key)

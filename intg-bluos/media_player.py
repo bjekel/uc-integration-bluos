@@ -456,14 +456,15 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
         if "items" in item and item["items"]:
             sub_items = [self._bluos_item_to_browse_item(sub) for sub in item["items"]]
 
+        text2 = item.get("text2")
         return BrowseMediaItem(
-            title=item.get("text", ""),
+            title=item.get("text", "")[:255],
             media_class=media_class,
             media_type=media_type,
             media_id=media_id,
             can_browse=browse_key is not None,
             can_play=play_url is not None,
-            subtitle=item.get("text2"),
+            subtitle=text2[:255] if text2 else None,
             thumbnail=thumbnail,
             items=sub_items,
         )

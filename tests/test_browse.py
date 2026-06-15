@@ -215,8 +215,8 @@ class TestBluOSPlayerBrowse:
         assert result["service_name"] == "TIDAL"
         assert result["search_key"] == "Tidal:Search"
 
-    async def test_browse_complex_key_not_encoded(self, player):
-        """Test that browse keys containing '?' and '&' are NOT percent-encoded."""
+    async def test_browse_complex_key_encoded(self, player):
+        """Test that browse keys containing '?' and '&' are percent-encoded in the URL."""
         player._available = True
         mock_session = MagicMock()
         mock_response = AsyncMock()
@@ -232,8 +232,12 @@ class TestBluOSPlayerBrowse:
         complex_key = "/Albums?service=Tidal&genre=0&category=toplist"
         await player.browse(key=complex_key)
 
-        call_kwargs = mock_session.get.call_args.kwargs
-        assert call_kwargs["params"] == {"key": complex_key}, "Key must be passed as a params dict"
+        call_args = mock_session.get.call_args
+        url_arg = str(call_args.args[0] if call_args.args else call_args.kwargs.get("url", ""))
+        assert "params" not in call_args.kwargs, "Key must not be passed via params dict"
+        assert (
+            "%3Fservice%3DTidal%26genre%3D0%26category%3Dtoplist" in url_arg
+        ), "Browse key must be percent-encoded in the URL"
 
     async def test_search_not_available(self, player):
         """Test search when player is not available."""

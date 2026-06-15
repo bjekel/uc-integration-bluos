@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from enum import StrEnum
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote
 
 import aiohttp
 from config import BluOSDevice
@@ -1115,12 +1115,19 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            # Unquote the key first to normalize any pre-encoded sequences (yarl
-            # would otherwise decode %2F/%3F before sending, producing malformed URLs
-            # like "key=foo//bar?baz"), then let aiohttp params properly re-encode.
-            params = {"key": unquote(key)} if key else None
-            _LOG.debug("Browse request: /Browse key=%s", params.get("key") if params else None)
-            xml_text = await self._raw_get("/Browse", params=params, timeout=15)
+            # Build the URL with the browse key already percent-encoded so yarl doesn't
+            # re-encode or normalise it. BluOS browse keys are themselves percent-encoded
+            # strings; passing them through aiohttp params (which calls unquote first)
+            # strips one encoding level and the player receives the wrong key.
+            base = f"{self._player.base_url}/Browse"
+            if key:
+                yurl = YarlURL(f"{base}?key={quote(key, safe='')}", encoded=True)
+            else:
+                yurl = YarlURL(base, encoded=True)
+            _LOG.debug("Browse request: /Browse key=%s", key)
+            async with self._player._session.get(yurl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                resp.raise_for_status()
+                xml_text = await resp.text()
             _LOG.debug("Browse response length: %d", len(xml_text))
             return self._parse_browse_xml(xml_text)
 
@@ -1143,9 +1150,12 @@ class BluOSPlayer:
             return {"items": [], "error": "Player not available"}
 
         try:
-            params = {"key": unquote(search_key), "q": query}
-            _LOG.debug("Search request: /Browse key=%s q=%s", params["key"], query)
-            xml_text = await self._raw_get("/Browse", params=params, timeout=15)
+            base = f"{self._player.base_url}/Browse"
+            yurl = YarlURL(f"{base}?key={quote(search_key, safe='')}&q={quote(query, safe='')}", encoded=True)
+            _LOG.debug("Search request: /Browse key=%s q=%s", search_key, query)
+            async with self._player._session.get(yurl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                resp.raise_for_status()
+                xml_text = await resp.text()
             return self._parse_browse_xml(xml_text)
 
         except (aiohttp.ClientError, ET.ParseError) as e:

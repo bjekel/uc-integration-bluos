@@ -137,7 +137,7 @@ class TestBluOSPlayer:
         disconnected_received = []
         player.events.on(Events.DISCONNECTED, lambda: disconnected_received.append(True))
 
-        with patch("bluos.Player", return_value=mock_pyblu_player):
+        with patch("bluos.Player", return_value=mock_pyblu_player), patch.object(player, "_schedule_reconnect"):
             result = await player.connect()
 
             assert result is False
@@ -154,7 +154,7 @@ class TestBluOSPlayer:
         disconnected_received = []
         player.events.on(Events.DISCONNECTED, lambda: disconnected_received.append(True))
 
-        with patch("bluos.Player", return_value=mock_pyblu_player):
+        with patch("bluos.Player", return_value=mock_pyblu_player), patch.object(player, "_schedule_reconnect"):
             result = await player.connect()
 
             assert result is False
@@ -171,7 +171,7 @@ class TestBluOSPlayer:
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.close = AsyncMock()
 
-        with patch("bluos.Player", return_value=mock_pyblu_player):
+        with patch("bluos.Player", return_value=mock_pyblu_player), patch.object(player, "_schedule_reconnect"):
             await player.connect()
             await player.disconnect()
 
@@ -233,7 +233,7 @@ class TestBluOSPlayer:
         mock_status.sleep = 0
         mock_pyblu_player.status = AsyncMock(return_value=mock_status)
 
-        with patch("bluos.Player", return_value=mock_pyblu_player):
+        with patch("bluos.Player", return_value=mock_pyblu_player), patch.object(player, "_schedule_reconnect"):
             await player.connect()
             result = await player.play()
             # Allow scheduled poll task to run
@@ -497,18 +497,7 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.base_url = "http://192.168.1.100:11000"
-
-        # Mock the HTTP session for direct API call (async context manager)
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.text = AsyncMock(return_value="<playlist shuffle='1'/>")
-
-        mock_context = MagicMock()
-        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_context.__aexit__ = AsyncMock(return_value=None)
-
-        mock_pyblu_player._session = MagicMock()
-        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
+        mock_pyblu_player.shuffle = AsyncMock()
 
         # Mock status for poll_status call
         mock_status = MagicMock()
@@ -534,10 +523,7 @@ class TestBluOSPlayer:
             await asyncio.sleep(0.2)
 
             assert result is True
-            mock_pyblu_player._session.get.assert_called_once()
-            call_args = mock_pyblu_player._session.get.call_args
-            assert "/Shuffle" in call_args[0][0]
-            assert call_args[1]["params"] == {"state": "1"}
+            mock_pyblu_player.shuffle.assert_called_once_with(True)
             # Verify poll_status was called
             mock_pyblu_player.status.assert_called_once()
             call_kwargs = mock_pyblu_player.status.call_args[1]
@@ -662,17 +648,7 @@ class TestBluOSPlayer:
         mock_pyblu_player.inputs = AsyncMock(return_value=[])
         mock_pyblu_player.presets = AsyncMock(return_value=[])
         mock_pyblu_player.base_url = "http://192.168.1.100:11000"
-
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.text = AsyncMock(return_value="")
-
-        mock_context = MagicMock()
-        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_context.__aexit__ = AsyncMock(return_value=None)
-
-        mock_pyblu_player._session = MagicMock()
-        mock_pyblu_player._session.get = MagicMock(return_value=mock_context)
+        mock_pyblu_player.play = AsyncMock(return_value="play")
 
         # Mock status for poll_status call
         mock_status = MagicMock()
@@ -698,9 +674,7 @@ class TestBluOSPlayer:
             await asyncio.sleep(0.2)
 
             assert result is True
-            call_args = mock_pyblu_player._session.get.call_args
-            assert "/Play" in call_args[0][0]
-            assert call_args[1]["params"] == {"seek": "120"}
+            mock_pyblu_player.play.assert_called_once_with(seek=120)
             # Verify poll_status was called
             mock_pyblu_player.status.assert_called_once()
             call_kwargs = mock_pyblu_player.status.call_args[1]

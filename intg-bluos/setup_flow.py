@@ -194,7 +194,9 @@ async def _handle_configuration_mode(msg: UserDataResponse) -> SetupAction:
     action = msg.input_values.get("action", "add")
 
     if action == "reset":
-        # Return to let driver.py handle the reset
+        if _devices_ref is not None:
+            _devices_ref.clear()
+        _setup_step = SetupSteps.INIT
         return SetupComplete()
 
     if action == "backup_restore":

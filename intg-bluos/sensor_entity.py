@@ -6,12 +6,13 @@ from typing import Any, Callable
 import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
+from entity_mixin import DiffPushMixin
 from ucapi.sensor import Attributes, DeviceClasses, States
 
 _LOG = logging.getLogger(__name__)
 
 
-class BluOSGroupSensor(ucapi.Sensor):
+class BluOSGroupSensor(DiffPushMixin, ucapi.Sensor):
     """Sensor entity reflecting a player's current multi-room group membership."""
 
     def __init__(
@@ -46,9 +47,6 @@ class BluOSGroupSensor(ucapi.Sensor):
         self._device = device
         self._player = player
         self._group_targets = group_targets
-        # When True, the next update pushes every value regardless of the diff.
-        # Set by clear_cached_attributes() after a standby exit.
-        self._force_update: bool = False
 
     def _get_targets(self) -> list[BluOSPlayer]:
         """Other configured players, for endpoint -> name resolution."""
@@ -81,21 +79,6 @@ class BluOSGroupSensor(ucapi.Sensor):
 
         return {Attributes.STATE: States.ON, Attributes.VALUE: value}
 
-    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
-        """
-        Return the subset of ``computed`` that differs from the current state.
-
-        When ``_force_update`` is set, every computed value is returned and the
-        flag is reset, forcing a full resync to the Remote.
-        """
-        if self._force_update:
-            self._force_update = False
-            changed = dict(computed)
-        else:
-            changed = {key: value for key, value in computed.items() if self.attributes.get(key) != value}
-        self.attributes.update(changed)
-        return changed
-
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
         Compute sensor attributes from a BluOS status update and return only
@@ -116,11 +99,3 @@ class BluOSGroupSensor(ucapi.Sensor):
             self.attributes.update(changed)
             return changed
         return {}
-
-    def clear_cached_attributes(self) -> None:
-        """
-        Force the next attribute update to push all values.
-
-        Used after a standby exit, when the Remote may have dropped our state.
-        """
-        self._force_update = True

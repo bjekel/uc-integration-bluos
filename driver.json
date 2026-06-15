@@ -1,6 +1,6 @@
 {
   "driver_id": "bluos",
-  "version": "0.17.3",
+  "version": "0.18.0",
   "min_core_api": "0.20.0",
   "name": {
     "en": "BluOS Streaming Players",
@@ -13,7 +13,8 @@
   },
   "port": 9300,
   "developer": {
-    "name": "Bart"
+    "name": "Bart Jekel",
+    "url": "https://github.com/bjekel/uc-integration-bluos"
   },
   "setup_data_schema": {
     "title": {

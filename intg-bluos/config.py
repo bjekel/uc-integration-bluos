@@ -4,6 +4,7 @@ import dataclasses
 import json
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import Callable
 
@@ -92,13 +93,13 @@ class Devices:
         except FileNotFoundError:
             _LOG.debug("No configuration file found at %s", self._config_file)
             return False
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
             _LOG.error("Failed to load configuration: %s", e)
             return False
 
     def store(self) -> bool:
         """
-        Persist configuration to disk.
+        Persist configuration to disk atomically (write-then-replace).
 
         Returns:
             True if successful, False otherwise
@@ -106,8 +107,17 @@ class Devices:
         try:
             os.makedirs(self._data_path, exist_ok=True)
             data = {"devices": [d.to_dict() for d in self._devices.values()]}
-            with open(self._config_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=self._data_path, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_path, self._config_file)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             _LOG.debug("Configuration saved to %s", self._config_file)
             return True
         except OSError as e:
@@ -205,7 +215,9 @@ class Devices:
         Import configuration from a JSON string.
 
         Parses and validates all devices before touching the current state,
-        then replaces all existing devices with the imported ones.
+        then replaces all existing devices with the imported ones. Fires
+        remove callbacks for every deleted device and add callbacks for every
+        new device. Writes to disk exactly once at the end (not N+1 times).
 
         Args:
             json_str: JSON string in the same format as exported by export()
@@ -222,9 +234,23 @@ class Devices:
 
         snapshot = dict(self._devices)
         try:
-            self.clear()
+            # Fire remove callbacks for every existing device, then replace in-memory
+            # state and fire add callbacks — without calling store() on each iteration.
+            old_ids = list(self._devices.keys())
+            for device_id in old_ids:
+                device = self._devices.pop(device_id)
+                if self._remove_handler:
+                    _LOG.info("Device removed: %s (%s)", device.name, device_id)
+                    self._remove_handler(device_id)
+
             for device in new_devices:
-                self.add_or_update(device)
+                is_new = device.id not in self._devices
+                self._devices[device.id] = device
+                if is_new and self._add_handler:
+                    _LOG.info("Device added: %s (%s)", device.name, device.id)
+                    self._add_handler(device)
+
+            self.store()  # single write
             _LOG.info("Imported %d device(s)", len(new_devices))
             return True
         except Exception as e:  # pylint: disable=broad-except

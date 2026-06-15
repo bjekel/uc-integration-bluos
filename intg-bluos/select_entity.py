@@ -6,12 +6,13 @@ from typing import Any
 import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
+from entity_mixin import DiffPushMixin
 from ucapi.select import Attributes, Commands, States
 
 _LOG = logging.getLogger(__name__)
 
 
-class BluOSPresetSelect(ucapi.Select):
+class BluOSPresetSelect(DiffPushMixin, ucapi.Select):
     """Select entity for BluOS presets."""
 
     def __init__(
@@ -44,10 +45,6 @@ class BluOSPresetSelect(ucapi.Select):
 
         self._device = device
         self._player = player
-        # When True, the next attribute computation pushes every value
-        # regardless of the diff. Set by clear_cached_attributes() after a
-        # standby exit, when the Remote may have dropped state.
-        self._force_update: bool = False
 
     def _compute_state_and_options(self) -> dict[str, Any]:
         """Compute the current STATE and OPTIONS attribute values."""
@@ -55,24 +52,6 @@ class BluOSPresetSelect(ucapi.Select):
             Attributes.STATE: States.ON if self._player.available else States.UNAVAILABLE,
             Attributes.OPTIONS: [preset.name for preset in self._player.presets],
         }
-
-    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
-        """
-        Return the subset of ``computed`` that differs from ``self.attributes``
-        and persist it locally.
-
-        State is diffed against ``self.attributes`` — the dict ucapi keeps in
-        sync with the Remote — so there is no separate shadow cache to drift.
-        When ``_force_update`` is set, every computed value is returned and the
-        flag is reset, forcing a full resync to the Remote.
-        """
-        if self._force_update:
-            self._force_update = False
-            changed = dict(computed)
-        else:
-            changed = {key: value for key, value in computed.items() if self.attributes.get(key) != value}
-        self.attributes.update(changed)
-        return changed
 
     def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """
@@ -110,16 +89,6 @@ class BluOSPresetSelect(ucapi.Select):
             self.attributes[Attributes.STATE] = States.UNAVAILABLE
             return {Attributes.STATE: States.UNAVAILABLE}
         return {}
-
-    def clear_cached_attributes(self) -> None:
-        """
-        Force the next attribute update to push all values.
-
-        Used after a standby exit, when the Remote may have dropped our state.
-        State is diffed against ``self.attributes`` directly, so there is no
-        separate cache to clear.
-        """
-        self._force_update = True
 
     async def command(self, cmd_id: str, params: dict[str, Any] | None = None, **_kwargs: Any) -> ucapi.StatusCodes:
         """

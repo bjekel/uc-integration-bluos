@@ -244,10 +244,11 @@ class BluOSPlayer:
             # the most recent target matters for the device.
             while not self._volume_queue.empty():
                 next_val = self._volume_queue.get_nowait()
-                self._volume_queue.task_done()
                 if next_val is None:  # Shutdown signal in drain
+                    self._volume_queue.task_done()
                     volume = None
                     break
+                self._volume_queue.task_done()
                 volume = next_val
             if volume is None:
                 break
@@ -256,6 +257,8 @@ class BluOSPlayer:
                 await asyncio.sleep(0.1)  # Device processing delay
             except PlayerError as e:
                 _LOG.error("Volume worker error: %s", e)
+                self._target_volume = None
+                self._last_volume_update = None
             finally:
                 self._volume_queue.task_done()
 
@@ -270,6 +273,7 @@ class BluOSPlayer:
                 await asyncio.sleep(0.1)  # Device processing delay
             except PlayerError as e:
                 _LOG.error("Mute worker error: %s", e)
+                self._target_mute = None
             finally:
                 self._mute_queue.task_done()
 
@@ -450,6 +454,10 @@ class BluOSPlayer:
         """
         if not self._is_available():
             return None
+        # Capture a local reference before the first await so that a concurrent
+        # disconnect() / _teardown() setting self._player = None cannot cause an
+        # AttributeError on the awaits below.
+        player = self._player
 
         try:
             etag = self._last_etag if use_etag else None
@@ -460,7 +468,7 @@ class BluOSPlayer:
             poll_timeout = (
                 self._device.active_poll_timeout if self._state in active_states else self._device.standby_timeout
             )
-            status = await self._player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
+            status = await player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
             self._last_etag = status.etag
 
             # Opportunistically refresh group membership alongside the status poll
@@ -538,6 +546,11 @@ class BluOSPlayer:
             if status.mute == self._target_mute:
                 self._target_mute = None
 
+        # If the device is now playing a source that doesn't match any preset,
+        # the cached preset name is stale — clear it so the select entity updates.
+        if self._current_preset_name and not any(p.name == self._current_preset_name for p in self._presets):
+            self._current_preset_name = None
+
         return {
             "state": self._map_state(status.state),
             "volume": volume,
@@ -589,8 +602,11 @@ class BluOSPlayer:
 
     async def _refresh_sync_status(self) -> None:
         """Refresh the cached sync status, leaving the previous value on error."""
+        player = self._player
+        if player is None:
+            return
         try:
-            self._sync_status = await self._player.sync_status()
+            self._sync_status = await player.sync_status()
         except (PlayerError, PlayerUnreachableError) as e:
             _LOG.debug("Sync status refresh failed for %s: %s", self._device.name, e)
 
@@ -748,9 +764,7 @@ class BluOSPlayer:
             _LOG.warning("set_shuffle called but player not available")
             return False
         try:
-            # Work around pyblu bug: it sends 'shuffle' param but BluOS API expects 'state'
-            # See: https://github.com/superfell/BluShepherd/blob/master/api.md
-            await self._raw_get("/Shuffle", params={"state": "1" if enabled else "0"})
+            await self._player.shuffle(enabled)
             self._schedule_poll()
             return True
         except (PlayerError, aiohttp.ClientError) as e:
@@ -987,7 +1001,7 @@ class BluOSPlayer:
         if not self._is_available():
             return False
         try:
-            await self._raw_get("/Play", params={"seek": str(position)})
+            await self._player.play(seek=position)
             _LOG.debug("Seeked to position %d", position)
             self._schedule_poll()
             return True

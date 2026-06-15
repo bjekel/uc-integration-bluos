@@ -18,7 +18,6 @@ from pyblu.errors import PlayerError, PlayerUnreachableError
 from remote_entity import BluOSRemote
 from select_entity import BluOSPresetSelect
 from sensor_entity import BluOSGroupSensor
-from ucapi import EntityTypes
 
 _LOG = logging.getLogger(__name__)
 
@@ -89,11 +88,30 @@ _poller_active = asyncio.Event()
 # BluOS devices immediately instead of letting them linger until poll timeout.
 _active_poll_tasks: list[asyncio.Task] = []
 
+# Registry of all fire-and-forget background tasks. Keeps a strong reference so
+# the event loop cannot GC them mid-flight. Tasks remove themselves on completion.
+_background_tasks: set[asyncio.Task] = set()
+
 # Last device state pushed to the remote. ucapi notifies the remote on every
 # set_device_state() call even when the value is unchanged, and those messages
 # can wake the remote from low-power mode, so we suppress redundant updates.
 # Reset on each remote (re)connect so a fresh client always gets the state.
 _last_device_state: ucapi.DeviceStates | None = None
+
+
+def _create_task(coro) -> asyncio.Task:
+    """Create a tracked background task so the GC cannot collect it mid-flight."""
+    task = _LOOP.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _on_poller_done(task: asyncio.Task) -> None:
+    """Log an unexpected status-poller exit — its death silently stops all polling."""
+    _background_tasks.discard(task)
+    if not task.cancelled() and (exc := task.exception()):
+        _LOG.critical("Status poller died unexpectedly: %s", exc, exc_info=exc)
 
 
 def _get_driver_path() -> str:
@@ -124,13 +142,13 @@ def _get_driver_path() -> str:
 def _on_device_added(device: BluOSDevice) -> None:
     """Handle device added callback."""
     _LOG.info("Device added: %s", device.name)
-    _LOOP.create_task(_add_player(device))
+    _create_task(_add_player(device))
 
 
 def _on_device_removed(device_id: str) -> None:
     """Handle device removed callback."""
     _LOG.info("Device removed: %s", device_id)
-    _LOOP.create_task(_remove_player(device_id))
+    _create_task(_remove_player(device_id))
 
 
 async def _add_player(device: BluOSDevice) -> None:
@@ -205,36 +223,45 @@ async def _add_player(device: BluOSDevice) -> None:
 
 async def _remove_player(device_id: str) -> None:
     """Remove a BluOS player."""
-    if device_id in _configured_players:
-        player = _configured_players.pop(device_id)
+    # Snapshot entity objects by identity BEFORE the first await. If a
+    # backup/restore adds the same device_id while we're awaiting disconnect(),
+    # _add_player will register new entities; we must not delete those.
+    player = _configured_players.pop(device_id, None)
+    entity = _entities.get(device_id)
+    select_entity = _select_entities.get(device_id)
+    sensor_entity = _sensor_entities.get(device_id)
+    remote_entity = _remote_entities.get(device_id)
+
+    if player:
         await player.disconnect()
 
-    if device_id in _entities:
-        entity = _entities.pop(device_id)
+    # Only remove each entity if it hasn't been replaced by a concurrent _add_player.
+    if entity is not None and _entities.get(device_id) is entity:
+        _entities.pop(device_id)
         _entity_id_to_device_id.pop(entity.id, None)
         if api.available_entities.contains(entity.id):
             api.available_entities.remove(entity.id)
         if api.configured_entities.contains(entity.id):
             api.configured_entities.remove(entity.id)
 
-    if device_id in _select_entities:
-        select_entity = _select_entities.pop(device_id)
+    if select_entity is not None and _select_entities.get(device_id) is select_entity:
+        _select_entities.pop(device_id)
         _select_entity_id_to_device_id.pop(select_entity.id, None)
         if api.available_entities.contains(select_entity.id):
             api.available_entities.remove(select_entity.id)
         if api.configured_entities.contains(select_entity.id):
             api.configured_entities.remove(select_entity.id)
 
-    if device_id in _sensor_entities:
-        sensor_entity = _sensor_entities.pop(device_id)
+    if sensor_entity is not None and _sensor_entities.get(device_id) is sensor_entity:
+        _sensor_entities.pop(device_id)
         _sensor_entity_id_to_device_id.pop(sensor_entity.id, None)
         if api.available_entities.contains(sensor_entity.id):
             api.available_entities.remove(sensor_entity.id)
         if api.configured_entities.contains(sensor_entity.id):
             api.configured_entities.remove(sensor_entity.id)
 
-    if device_id in _remote_entities:
-        remote_entity = _remote_entities.pop(device_id)
+    if remote_entity is not None and _remote_entities.get(device_id) is remote_entity:
+        _remote_entities.pop(device_id)
         _remote_entity_id_to_device_id.pop(remote_entity.id, None)
         if api.available_entities.contains(remote_entity.id):
             api.available_entities.remove(remote_entity.id)
@@ -284,14 +311,14 @@ def _on_player_connected(device_id: str) -> None:
         _LOG.debug("Remote in standby, skipping entity updates on player connect")
         return
 
-    _LOOP.create_task(_update_device_state())
+    _create_task(_update_device_state())
 
     if device_id in _entities:
         entity = _entities[device_id]
         # Update simple commands with current presets
         entity.update_options()
         # Trigger initial status poll
-        _LOOP.create_task(_poll_player(device_id))
+        _create_task(_poll_player(device_id))
 
     # Refresh the remote's commands/UI (presets now loaded) and mark it on
     if device_id in _remote_entities:
@@ -334,7 +361,7 @@ def _on_player_disconnected(device_id: str) -> None:
         _LOG.debug("Remote in standby, skipping entity updates on player disconnect")
         return
 
-    _LOOP.create_task(_update_device_state())
+    _create_task(_update_device_state())
 
     if device_id in _entities:
         entity = _entities[device_id]
@@ -629,6 +656,12 @@ async def _on_unsubscribe_entities(entity_ids: list[str]) -> None:
 # Setup Flow Handler
 
 
+async def _restart_player(device: BluOSDevice) -> None:
+    """Remove and re-add a player so updated config takes effect immediately."""
+    await _remove_player(device.id)
+    await _add_player(device)
+
+
 async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     """Handle setup driver messages."""
     result = await setup_flow.driver_setup_handler(msg)
@@ -637,38 +670,20 @@ async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     if isinstance(result, ucapi.SetupComplete):
         device = setup_flow.get_configured_device()
         if device and _devices is not None:
-            # Add device to config (don't trigger callback - we'll await _add_player directly)
             is_new = _devices.add_or_update(device, trigger_callbacks=False)
 
-            # Add player and wait for entity registration
+            # Fire player start/restart as a background task so SetupComplete is
+            # returned to the Remote immediately — awaiting connect() here blocks
+            # the response for up to connection-timeout seconds, which can cause
+            # the UC Remote's setup wizard to time out and show an error.
             if is_new:
                 _LOG.info("New device configured: %s (%s)", device.name, device.id)
-                await _add_player(device)
+                _create_task(_add_player(device))
+            else:
+                _LOG.info("Device reconfigured: %s (%s) — restarting player", device.name, device.id)
+                _create_task(_restart_player(device))
 
     return result
-
-
-# Entity Command Handler
-
-
-async def _entity_command_handler(
-    entity_type: EntityTypes,
-    entity_id: str,
-    cmd_id: str,
-    params: dict[str, Any] | None,
-) -> ucapi.StatusCodes:
-    """Handle entity commands."""
-    _LOG.debug("Command %s for %s (type: %s)", cmd_id, entity_id, entity_type)
-
-    # O(1) lookup via reverse maps populated when entities are registered
-    if device_id := _entity_id_to_device_id.get(entity_id):
-        return await _entities[device_id].command(cmd_id, params)
-
-    if device_id := _select_entity_id_to_device_id.get(entity_id):
-        return await _select_entities[device_id].command(cmd_id, params)
-
-    _LOG.warning("Entity not found: %s", entity_id)
-    return ucapi.StatusCodes.NOT_FOUND
 
 
 def _configure_logging() -> None:
@@ -718,11 +733,9 @@ async def _main() -> None:
     # Update device state after initial player setup
     await _update_device_state()
 
-    # Set up entity command handler
-    api.entity_command_handler = _entity_command_handler
-
-    # Start background status poller
-    _LOOP.create_task(_status_poller())
+    # Start background status poller — done-callback logs unexpected exits
+    poller_task = _create_task(_status_poller())
+    poller_task.add_done_callback(_on_poller_done)
 
     # Run the integration API with setup handler
     await api.init(_get_driver_path(), _setup_handler)

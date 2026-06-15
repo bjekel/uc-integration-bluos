@@ -10,6 +10,7 @@ from bluos import BluOSPlayer
 from bluos import RepeatMode as BluOSRepeatMode
 from bluos import States as BluOSStates
 from config import BluOSDevice
+from entity_mixin import DiffPushMixin
 from ucapi.api_definitions import StatusCodes
 from ucapi.media_player import (
     Attributes,
@@ -143,7 +144,7 @@ class _LRUCache(OrderedDict):
             self.popitem(last=False)
 
 
-class BluOSMediaPlayer(ucapi.MediaPlayer):
+class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
     """Media player entity for BluOS devices."""
 
     def __init__(
@@ -197,10 +198,6 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
 
         self._device = device
         self._player = player
-        # When True, the next update_attributes() call pushes every computed
-        # value regardless of the diff. Set by clear_cached_attributes() after a
-        # (re)subscribe or standby exit, when the Remote may have dropped state.
-        self._force_update: bool = False
         self._last_search_key: str | None = None
         # Maps browseKey → playURL for items that are both browsable and playable
         self._play_url_cache: _LRUCache = _LRUCache(_BROWSE_CACHE_MAX)
@@ -309,34 +306,19 @@ class BluOSMediaPlayer(ucapi.MediaPlayer):
         self.attributes.update(changed)
         return changed
 
-    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
-        """
-        Return the subset of ``computed`` that differs from ``self.attributes``.
-
-        When ``_force_update`` is set, every computed value is returned and the
-        flag is reset, forcing a full resync to the Remote.
-        """
-        if self._force_update:
-            self._force_update = False
-            return dict(computed)
-        return {key: value for key, value in computed.items() if self.attributes.get(key) != value}
-
     def set_unavailable(self) -> dict[str, Any]:
-        """Mark entity as unavailable and return changed attributes."""
+        """Mark entity as unavailable and clear stale media info."""
         if self.attributes.get(Attributes.STATE) != States.UNAVAILABLE:
-            self.attributes[Attributes.STATE] = States.UNAVAILABLE
-            return {Attributes.STATE: States.UNAVAILABLE}
+            changed = {
+                Attributes.STATE: States.UNAVAILABLE,
+                Attributes.MEDIA_TITLE: "",
+                Attributes.MEDIA_ARTIST: "",
+                Attributes.MEDIA_ALBUM: "",
+                Attributes.MEDIA_IMAGE_URL: "",
+            }
+            self.attributes.update(changed)
+            return changed
         return {}
-
-    def clear_cached_attributes(self) -> None:
-        """
-        Force the next update_attributes() call to push all values.
-
-        Used after a (re)subscribe or standby exit, when the Remote may have
-        dropped our state. State is diffed against ``self.attributes`` directly,
-        so there is no separate cache to clear.
-        """
-        self._force_update = True
 
     def update_options(self) -> dict[str, Any]:
         """Update and return entity options with current simple commands."""

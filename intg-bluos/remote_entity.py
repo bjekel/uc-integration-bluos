@@ -14,6 +14,7 @@ from typing import Any
 import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
+from entity_mixin import DiffPushMixin
 from media_player import BluOSMediaPlayer
 from ucapi.remote import Attributes, Commands, Features, Options, States
 from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
@@ -42,7 +43,7 @@ _SEND_CMD_MAP: dict[str, str] = {
 _TRANSPORT_COMMANDS = list(_SEND_CMD_MAP.keys())
 
 
-class BluOSRemote(ucapi.Remote):
+class BluOSRemote(DiffPushMixin, ucapi.Remote):
     """Remote entity providing a bindable command surface for a BluOS player."""
 
     def __init__(
@@ -63,8 +64,6 @@ class BluOSRemote(ucapi.Remote):
         self._device = device
         self._player = player
         self._media_entity = media_entity
-        # When True, the next update pushes STATE regardless of the diff.
-        self._force_update: bool = False
 
         super().__init__(
             f"bluos_{device.id}_remote",
@@ -166,16 +165,6 @@ class BluOSRemote(ucapi.Remote):
         """Compute the remote STATE from player availability."""
         return {Attributes.STATE: States.ON if self._player.available else States.UNAVAILABLE}
 
-    def _diff_attributes(self, computed: dict[str, Any]) -> dict[str, Any]:
-        """Return changed attributes, honouring a forced full resync."""
-        if self._force_update:
-            self._force_update = False
-            changed = dict(computed)
-        else:
-            changed = {key: value for key, value in computed.items() if self.attributes.get(key) != value}
-        self.attributes.update(changed)
-        return changed
-
     def update_attributes(self, _attributes: dict[str, Any]) -> dict[str, Any]:
         """Recompute STATE from availability and return the diff."""
         return self._diff_attributes(self._compute_state())
@@ -186,7 +175,3 @@ class BluOSRemote(ucapi.Remote):
             self.attributes[Attributes.STATE] = States.UNAVAILABLE
             return {Attributes.STATE: States.UNAVAILABLE}
         return {}
-
-    def clear_cached_attributes(self) -> None:
-        """Force the next update to push STATE (after standby exit/resubscribe)."""
-        self._force_update = True

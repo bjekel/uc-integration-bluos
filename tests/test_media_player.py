@@ -62,6 +62,7 @@ class TestBluOSMediaPlayer:
         player.available = True
         player.state = BluOSStates.ON
         player.get_source_list.return_value = ["radio", "preset:1"]
+        player.ensure_connected = AsyncMock(side_effect=lambda timeout=3.0: player.available)
         return player
 
     @pytest.fixture

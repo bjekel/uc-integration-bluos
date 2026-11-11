@@ -104,7 +104,7 @@ class BluOSPresetSelect(DiffPushMixin, ucapi.Select):
         params = params or {}
         _LOG.debug("Select command %s with params %s for %s", cmd_id, params, self._device.name)
 
-        if not self._player.available:
+        if not await self._player.ensure_connected():
             return ucapi.StatusCodes.SERVICE_UNAVAILABLE
 
         presets = self._player.presets

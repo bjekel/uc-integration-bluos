@@ -586,7 +586,7 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
         params = params or {}
         _LOG.debug("Command %s with params %s for %s", cmd_id, params, self._device.name)
 
-        if not self._player.available:
+        if not await self._player.ensure_connected():
             return ucapi.StatusCodes.SERVICE_UNAVAILABLE
 
         # Check if it's a simple preset command

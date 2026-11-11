@@ -30,6 +30,7 @@ class TestBluOSRemote:
         player = MagicMock(spec=BluOSPlayer)
         player.available = True
         player.presets = [_preset(1, "Jazz"), _preset(2, "Radio")]
+        player.ensure_connected = AsyncMock(side_effect=lambda timeout=3.0: player.available)
         return player
 
     @pytest.fixture

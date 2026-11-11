@@ -45,6 +45,7 @@ class TestBluOSPresetSelect:
         player.name = "Test Player"
         player.available = True
         player.presets = mock_presets
+        player.ensure_connected = AsyncMock(side_effect=lambda timeout=3.0: player.available)
         return player
 
     @pytest.fixture
@@ -338,6 +339,7 @@ class TestBluOSPresetSelectEmptyPresets:
         player.name = "Test Player"
         player.available = True
         player.presets = []
+        player.ensure_connected = AsyncMock(side_effect=lambda timeout=3.0: player.available)
         return player
 
     @pytest.fixture

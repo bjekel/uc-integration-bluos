@@ -1,6 +1,7 @@
 """BluOS device wrapper using pyblu library."""
 
 import asyncio
+import errno
 import logging
 import time
 import xml.etree.ElementTree as ET
@@ -21,6 +22,15 @@ _LOG = logging.getLogger(__name__)
 MIN_RECONNECT_DELAY = 1.0
 MAX_RECONNECT_DELAY = 30.0
 BACKOFF_FACTOR = 2.0
+
+# Wake-up race handling: right after the Remote resumes, WiFi may not be routable
+# yet ("Network is unreachable"). Retry such errors quickly for a short window
+# instead of waiting for the regular backoff.
+NETWORK_RETRY_WINDOW = 3.0
+NETWORK_RETRY_DELAY = 0.05
+
+# How long a command waits for a (re)connect before giving up with 503.
+CONNECT_WAIT_FOR_COMMAND = 3.0
 
 # Preset command prefixes
 PRESET_LEGACY_PREFIX = "preset:"
@@ -99,6 +109,9 @@ class BluOSPlayer:
         self._state = States.UNKNOWN
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_delay = MIN_RECONNECT_DELAY
+        # Start of the current series of failed connect attempts (for the fast
+        # network-unreachable retry window); None when connected/idle.
+        self._connect_series_start: float | None = None
         self._last_etag: str | None = None
         self._inputs: list[Input] = []
         self._presets: list[Preset] = []
@@ -194,6 +207,59 @@ class BluOSPlayer:
         """Whether a reconnect attempt is currently scheduled or in progress."""
         return self._reconnect_task is not None and not self._reconnect_task.done()
 
+    async def ensure_connected(self, timeout: float = CONNECT_WAIT_FOR_COMMAND) -> bool:
+        """
+        Make sure the player is connected, waiting up to ``timeout`` seconds.
+
+        Called by command handlers only (never by the background poller, so it
+        cannot reopen connections after ENTER_STANDBY). Joins a connect that is
+        already running, or starts one right away (skipping any pending backoff
+        sleep) so commands arriving during the wake-up reconnect succeed instead
+        of failing with 503.
+
+        Returns:
+            True if the player is available when done, False on timeout.
+        """
+        if self._available:
+            return True
+        deadline = self._loop.time() + timeout
+        while True:
+            if self._available:
+                return True
+            remaining = deadline - self._loop.time()
+            if remaining <= 0:
+                return False
+            if self._connecting:
+                await asyncio.sleep(min(NETWORK_RETRY_DELAY, remaining))
+                continue
+            # Nothing is connecting: skip the backoff sleep and connect now.
+            if self._reconnect_task and not self._reconnect_task.done():
+                self._reconnect_task.cancel()
+                self._reconnect_task = None
+            task = self._loop.create_task(self.connect())
+            try:
+                await asyncio.wait_for(asyncio.shield(task), remaining)
+            except asyncio.TimeoutError:
+                return self._available
+            except Exception:  # connect() handles its own errors; be defensive
+                pass
+            if not self._available:
+                await asyncio.sleep(min(NETWORK_RETRY_DELAY, max(deadline - self._loop.time(), 0)))
+
+    @staticmethod
+    def _is_network_unreachable(err: BaseException | None) -> bool:
+        """True if the exception chain contains ENETUNREACH (network not up yet)."""
+        seen = 0
+        while err is not None and seen < 10:
+            if isinstance(err, OSError) and err.errno == errno.ENETUNREACH:
+                return True
+            os_err = getattr(err, "os_error", None)
+            if isinstance(os_err, OSError) and os_err.errno == errno.ENETUNREACH:
+                return True
+            err = err.__cause__ or err.__context__
+            seen += 1
+        return False
+
     def _is_available(self) -> bool:
         """Check if player is connected and available for commands."""
         return self._player is not None and self._available
@@ -288,6 +354,8 @@ class BluOSPlayer:
             return False
 
         self._connecting = True
+        if self._connect_series_start is None:
+            self._connect_series_start = time.monotonic()
         self._events.emit(Events.CONNECTING)
 
         # Tear down any workers/session left over from a previous connection so
@@ -310,6 +378,7 @@ class BluOSPlayer:
 
             self._available = True
             self._reconnect_delay = MIN_RECONNECT_DELAY
+            self._connect_series_start = None
 
             # Start volume/mute worker tasks
             self._volume_worker_task = asyncio.create_task(self._volume_worker())
@@ -324,7 +393,15 @@ class BluOSPlayer:
             self._available = False
             self._state = States.UNAVAILABLE
             self._events.emit(Events.DISCONNECTED)
-            self._schedule_reconnect()
+            # Network not up yet right after wake-up: retry fast inside the window.
+            in_window = (
+                self._connect_series_start is not None
+                and time.monotonic() - self._connect_series_start < NETWORK_RETRY_WINDOW
+            )
+            if in_window and self._is_network_unreachable(e):
+                self._schedule_reconnect(delay=NETWORK_RETRY_DELAY, backoff=False)
+            else:
+                self._schedule_reconnect()
             return False
 
         except PlayerError as e:
@@ -355,6 +432,7 @@ class BluOSPlayer:
 
         await self._teardown()
 
+        self._connect_series_start = None
         self._available = False
         self._connecting = False
         self._state = States.UNAVAILABLE
@@ -392,19 +470,29 @@ class BluOSPlayer:
                 _LOG.debug("Error closing player connection: %s", e)
             self._player = None
 
-    def _schedule_reconnect(self) -> None:
-        """Schedule a reconnection attempt with exponential backoff."""
-        if self._reconnect_task and not self._reconnect_task.done():
+    def _schedule_reconnect(self, delay: float | None = None, backoff: bool = True) -> None:
+        """
+        Schedule a reconnection attempt.
+
+        By default uses exponential backoff. ``delay``/``backoff=False`` schedule
+        a fast fixed-delay retry that leaves the backoff state untouched.
+        """
+        # A pending task blocks rescheduling, except the reconnect task itself:
+        # connect() runs inside it and must be able to chain the next retry
+        # (otherwise a failed reconnect attempt would never be retried).
+        if (
+            self._reconnect_task
+            and not self._reconnect_task.done()
+            and self._reconnect_task is not asyncio.current_task()
+        ):
             return
 
         async def reconnect() -> None:
-            _LOG.debug(
-                "Scheduling reconnect to %s in %.1f seconds",
-                self._device.name,
-                self._reconnect_delay,
-            )
-            await asyncio.sleep(self._reconnect_delay)
-            self._reconnect_delay = min(self._reconnect_delay * BACKOFF_FACTOR, MAX_RECONNECT_DELAY)
+            wait = self._reconnect_delay if delay is None else delay
+            _LOG.debug("Scheduling reconnect to %s in %.2f seconds", self._device.name, wait)
+            await asyncio.sleep(wait)
+            if backoff:
+                self._reconnect_delay = min(self._reconnect_delay * BACKOFF_FACTOR, MAX_RECONNECT_DELAY)
             try:
                 await self.connect()
             except Exception as e:

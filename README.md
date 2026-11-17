@@ -29,8 +29,20 @@ and talks to players through [`pyblu`](https://github.com/LouisChrist/pyblu).
 - **Browse & search:** navigate the BluOS music library and play items directly
   (`browse_media`, `search_media`, `play_media`), plus clear playlist
 
-### Presets (Select entity)
-A dropdown of the player's saved presets for quick recall.
+### Select entities
+- **Presets:** a dropdown of the player's saved presets for quick recall.
+- **Input:** the physical inputs (Bluetooth, optical, HDMI ARC, USB, …). Empty while
+  streaming from a service.
+- **Sleep timer:** Off, 15, 30, 45, 60 or 90 minutes.
+
+### Sensor entities
+- **Source:** what is playing from, e.g. "TIDAL" or "Bluetooth".
+- **Volume:** the volume in dB as reported by the player.
+- **Stream quality:** the format of the current stream, e.g. "FLAC 16/44.1",
+  "MQA" or "320 kbps". Empty when stopped.
+
+Sensors only send a value to the Remote when it changes, so they add no extra
+wake-ups during playback.
 
 ### Multi-room grouping
 Leader-driven grouping exposed as simple commands (see below). A dedicated
@@ -180,8 +192,8 @@ intg-bluos/
 ├── bluos.py         # pyblu wrapper: connection, events, playback, volume/mute
 │                    #   workers, browse/search, grouping/sync-status
 ├── media_player.py  # MediaPlayer entity: commands, state mapping, grouping
-├── select_entity.py # Select entity: preset dropdown
-├── sensor_entity.py # Sensor entity: multi-room group membership
+├── select_entity.py # Select entities: presets, input, sleep timer
+├── sensor_entity.py # Sensor entities: group membership, source, volume (dB), stream quality
 ├── remote_entity.py # Remote entity: bindable commands → media player
 ├── config.py        # device config dataclass + JSON persistence + manager
 ├── discover.py      # mDNS discovery (_musc._tcp.local)

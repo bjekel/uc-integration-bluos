@@ -16,8 +16,8 @@ from config import BluOSDevice, Devices
 from media_player import BluOSMediaPlayer
 from pyblu.errors import PlayerError, PlayerUnreachableError
 from remote_entity import BluOSRemote
-from select_entity import BluOSPresetSelect
-from sensor_entity import BluOSGroupSensor
+from select_entity import BluOSInputSelect, BluOSPresetSelect, BluOSSleepTimerSelect
+from sensor_entity import BluOSGroupSensor, BluOSSourceSensor, BluOSStreamQualitySensor, BluOSVolumeSensor
 
 _LOG = logging.getLogger(__name__)
 
@@ -44,6 +44,28 @@ _entity_id_to_device_id: dict[str, str] = {}
 _select_entity_id_to_device_id: dict[str, str] = {}
 _sensor_entity_id_to_device_id: dict[str, str] = {}
 _remote_entity_id_to_device_id: dict[str, str] = {}
+
+# Status entities: selects and sensors that only mirror the player status. They
+# share one lifecycle (update_attributes / set_unavailable /
+# clear_cached_attributes), so they live in one registry instead of a dict each.
+StatusEntity = (
+    BluOSInputSelect | BluOSSleepTimerSelect | BluOSSourceSensor | BluOSVolumeSensor | BluOSStreamQualitySensor
+)
+_STATUS_ENTITY_TYPES = (
+    BluOSInputSelect,
+    BluOSSleepTimerSelect,
+    BluOSSourceSensor,
+    BluOSVolumeSensor,
+    BluOSStreamQualitySensor,
+)
+_status_entities: dict[str, list[StatusEntity]] = {}
+_status_entity_id_to_device_id: dict[str, str] = {}
+
+
+def _push(entity: ucapi.Entity, changed: dict[str, Any]) -> None:
+    """Send changed attributes to the Remote (no-op when nothing changed)."""
+    if changed:
+        api.configured_entities.update_attributes(entity.id, changed)
 
 
 def _group_targets(device_id: str) -> list[BluOSPlayer]:
@@ -160,7 +182,7 @@ def _on_device_updated(device: BluOSDevice) -> None:
 def _device_entities(device_id: str) -> list[ucapi.Entity]:
     """All UC entities currently registered for a device."""
     stores = (_entities, _select_entities, _sensor_entities, _remote_entities)
-    return [store[device_id] for store in stores if device_id in store]
+    return [store[device_id] for store in stores if device_id in store] + list(_status_entities.get(device_id, []))
 
 
 async def _add_player(device: BluOSDevice, keep_configured: frozenset[str] = frozenset()) -> None:
@@ -233,7 +255,16 @@ async def _add_player(device: BluOSDevice, keep_configured: frozenset[str] = fro
 
     _LOG.info("Registered remote entity: %s", remote_entity.id)
 
-    for new_entity in (entity, select_entity, sensor_entity, remote_entity):
+    status_entities: list[StatusEntity] = [factory(device, player) for factory in _STATUS_ENTITY_TYPES]
+    _status_entities[device.id] = status_entities
+    for status_entity in status_entities:
+        _status_entity_id_to_device_id[status_entity.id] = device.id
+        if api.available_entities.contains(status_entity.id):
+            api.available_entities.remove(status_entity.id)
+        api.available_entities.add(status_entity)
+    _LOG.info("Registered status entities: %s", [e.id for e in status_entities])
+
+    for new_entity in (entity, select_entity, sensor_entity, remote_entity, *status_entities):
         if new_entity.id in keep_configured:
             api.configured_entities.remove(new_entity.id)
             api.configured_entities.add(new_entity)
@@ -257,6 +288,7 @@ async def _remove_player(device_id: str) -> None:
     select_entity = _select_entities.get(device_id)
     sensor_entity = _sensor_entities.get(device_id)
     remote_entity = _remote_entities.get(device_id)
+    status_entities = _status_entities.get(device_id)
 
     if player:
         await player.disconnect()
@@ -293,6 +325,15 @@ async def _remove_player(device_id: str) -> None:
             api.available_entities.remove(remote_entity.id)
         if api.configured_entities.contains(remote_entity.id):
             api.configured_entities.remove(remote_entity.id)
+
+    if status_entities is not None and _status_entities.get(device_id) is status_entities:
+        _status_entities.pop(device_id)
+        for status_entity in status_entities:
+            _status_entity_id_to_device_id.pop(status_entity.id, None)
+            if api.available_entities.contains(status_entity.id):
+                api.available_entities.remove(status_entity.id)
+            if api.configured_entities.contains(status_entity.id):
+                api.configured_entities.remove(status_entity.id)
 
     # The removed device is no longer a grouping target for the remaining
     # players, so regenerate the surviving entities' simple commands.
@@ -416,6 +457,9 @@ def _on_player_disconnected(device_id: str) -> None:
         if changed:
             api.configured_entities.update_attributes(remote_entity.id, changed)
 
+    for status_entity in _status_entities.get(device_id, []):
+        _push(status_entity, status_entity.set_unavailable())
+
 
 def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
     """Handle player update event."""
@@ -448,6 +492,9 @@ def _on_player_update(device_id: str, attributes: dict[str, Any]) -> None:
         changed = remote_entity.update_attributes(attributes)
         if changed:
             api.configured_entities.update_attributes(remote_entity.id, changed)
+
+    for status_entity in _status_entities.get(device_id, []):
+        _push(status_entity, status_entity.update_attributes(attributes))
 
 
 async def _poll_player(device_id: str) -> None:
@@ -617,6 +664,8 @@ async def _on_exit_standby() -> None:
             _sensor_entities[device_id].clear_cached_attributes()
         if device_id in _remote_entities:
             _remote_entities[device_id].clear_cached_attributes()
+        for status_entity in _status_entities.get(device_id, []):
+            status_entity.clear_cached_attributes()
 
     # Parallel status refresh for all available players
     available_players = [(device_id, player) for device_id, player in _configured_players.items() if player.available]
@@ -671,6 +720,14 @@ async def _on_subscribe_entities(entity_ids: list[str]) -> None:
             remote_entity = _remote_entities[device_id]
             remote_entity.clear_cached_attributes()
             api.configured_entities.update_attributes(remote_entity.id, remote_entity.attributes)
+            continue
+
+        if device_id := _status_entity_id_to_device_id.get(entity_id):
+            # Push the current values; the next poll refreshes them.
+            for status_entity in _status_entities.get(device_id, []):
+                if status_entity.id == entity_id:
+                    status_entity.clear_cached_attributes()
+                    api.configured_entities.update_attributes(status_entity.id, status_entity.attributes)
 
 
 @api.listens_to(ucapi.Events.UNSUBSCRIBE_ENTITIES)

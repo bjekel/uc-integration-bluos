@@ -40,8 +40,8 @@ Environment variables:
 driver.py        # entry point, UC API WebSocket server, background poller
 bluos.py         # pyblu wrapper — connection, events, playback, volume workers, browse/search
 media_player.py  # UC MediaPlayer entity — command handling, state mapping, browse, grouping commands
-select_entity.py # UC Select entity — preset dropdown
-sensor_entity.py # UC Sensor entity — multi-room group membership state
+select_entity.py # UC Select entities — presets, physical input, sleep timer
+sensor_entity.py # UC Sensor entities — group membership, source, volume (dB), stream quality
 remote_entity.py # UC Remote entity — bindable command surface, delegates to media_player
 config.py        # device config dataclass, JSON persistence, device manager with callbacks
 discover.py      # mDNS discovery on _musc._tcp.local
@@ -51,7 +51,35 @@ i18n.py          # translations: _a()/_am() build {"en","de","nl"} dicts from lo
 
 **Data flow:** `driver.py` creates a `BluOSPlayer` (bluos.py) per device and listens to its events (`CONNECTED`, `DISCONNECTED`, `UPDATE`). It also creates the UC entities (`BluOSMediaPlayer`, `BluOSPresetSelect`, `BluOSGroupSensor`, `BluOSRemote`) per device and routes incoming UC Remote commands to the appropriate player. The `BluOSRemote` delegates command execution to the device's `BluOSMediaPlayer` so there is a single command-dispatch path. A background poller task calls `player.poll_status()` using long-polling with etag support.
 
-**State is module-level in driver.py:** `_configured_players`, `_entities`, `_select_entities`, `_sensor_entities`, `_remote_entities`, `_devices`, `_REMOTE_IN_STANDBY`.
+**State is module-level in driver.py:** `_configured_players`, `_entities`, `_select_entities`, `_sensor_entities`, `_remote_entities`, `_status_entities`, `_devices`, `_REMOTE_IN_STANDBY`.
+
+**Status entities:** the input and sleep-timer selects and the source, volume
+(dB) and stream-quality sensors only mirror the player status, so the driver
+keeps them in one registry (`_status_entities[device_id]`, a list, plus
+`_status_entity_id_to_device_id`) and drives them through the same four calls:
+`update_attributes(attrs)`, `set_unavailable()`, `clear_cached_attributes()` and
+(selects) `command()`. To add another one, add a class with that interface to
+`_STATUS_ENTITY_TYPES`; registration, removal, restart, standby and subscribe
+handling then come for free. Their values come from keys in
+`BluOSPlayer._status_to_attributes` (`volume_db`, `sleep_timer`, `input_name`,
+`service_name`, `stream_quality`). Entity names are plain English, like the
+older entities (only setup texts are translated).
+
+**Our own /Status long-poll:** `BluOSPlayer._fetch_status` sends the status
+request itself instead of calling `pyblu.Player.status()`, because pyblu's
+`Status` drops `quality`, `streamFormat` and `serviceName`. It is the same single
+request per poll (`etag` + `timeout` query params; the player holds it open until
+the status changes or the poll timeout passes), the body is still parsed by
+pyblu's public `parse_status`, and `parse_status_extras` reads the extra fields
+from the same body. Errors are mapped like pyblu's `@_wrap_in_unreachable_error`:
+timeouts and connection errors → `PlayerUnreachableError` (poll loop marks the
+player unavailable and reconnects); other HTTP errors → `PlayerError`. Keep that
+mapping if you touch it, or a dropped player skips the reconnect path. Tests: a
+`tests/conftest.py` autouse fixture routes `_fetch_status` through the mocked
+`pyblu.Player.status()` so the many existing mocks keep working; tests of the
+real request use `@pytest.mark.real_status_fetch` (see
+`tests/test_status_entities.py`, which runs a local server with real long-poll
+behaviour).
 
 **Multi-room grouping:** the media player exposes generated simple commands — `GROUP_TOGGLE_<room>` (toggle a room in/out of this player's group), `GROUP_ALL`, `UNGROUP_ALL`, `LEAVE_GROUP` — driven from the leader. `BluOSPlayer` caches `SyncStatus` on each poll and emits `group_role`/`group_leader`/`group_followers`, which the group sensor renders. Endpoint→room-name resolution uses the other configured players via an injected `_group_targets` accessor.
 
@@ -133,6 +161,13 @@ wakes to zero. Follow these rules:
   the aiohttp session, stop volume/mute workers, cancel in-flight long-polls and
   reconnect backoff) so nothing wakes the CPU or the Remote while asleep;
   `EXIT_STANDBY` reconnects and forces a no-etag full refresh.
+- **Status sensors and selects:** they are diff-pushed like everything else.
+  Stream quality and source change at most once per track or source switch, which
+  coincides with a media-player push that happens anyway. The sleep-timer select
+  maps a counting-down timer to the step that covers it (23 min left → "30 min"),
+  so it does not push every minute. Never add a status value that changes every
+  poll (remaining sleep minutes, elapsed time, bitrate fluctuations) without
+  throttling it the same way.
 - **New periodic attributes:** before adding any attribute that updates on every
   poll, ask "does this wake the Remote each cycle?" If yes, throttle it the same
   way — push only on meaningful change.

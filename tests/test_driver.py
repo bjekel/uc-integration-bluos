@@ -271,6 +271,8 @@ class TestRestartKeepsSubscriptions:
             "_remote_entities": dict(driver._remote_entities),
             "_sensor_entity_id_to_device_id": dict(driver._sensor_entity_id_to_device_id),
             "_remote_entity_id_to_device_id": dict(driver._remote_entity_id_to_device_id),
+            "_status_entities": dict(driver._status_entities),
+            "_status_entity_id_to_device_id": dict(driver._status_entity_id_to_device_id),
         }
         for name in saved:
             getattr(driver, name).clear()
@@ -327,3 +329,43 @@ class TestRestartKeepsSubscriptions:
         assert api.configured_entities.get(driver._remote_entities["aa"].id) is None
         created[0].disconnect.assert_awaited_once()
         created[-1].connect.assert_awaited_once()
+
+    def test_restart_moves_status_entity_subscriptions(self, real_stores, monkeypatch):
+        from config import BluOSDevice
+
+        monkeypatch.setattr(driver, "BluOSPlayer", self._fake_player_factory([]))
+        api = real_stores
+        device = BluOSDevice(id="aa", name="Kitchen", address="10.0.0.1")
+
+        run(driver._add_player(device))
+        old_quality = next(e for e in driver._status_entities["aa"] if e.id == "bluos_aa_stream_quality")
+        api.configured_entities.add(old_quality)
+
+        run(driver._restart_player(BluOSDevice(id="aa", name="Kitchen", address="10.0.0.99")))
+
+        new_quality = api.configured_entities.get("bluos_aa_stream_quality")
+        assert new_quality is not None and new_quality is not old_quality
+        assert new_quality in driver._status_entities["aa"]
+        assert api.configured_entities.get("bluos_aa_input") is None
+
+    def test_add_and_remove_registers_all_status_entities(self, real_stores, monkeypatch):
+        from config import BluOSDevice
+
+        monkeypatch.setattr(driver, "BluOSPlayer", self._fake_player_factory([]))
+        api = real_stores
+        run(driver._add_player(BluOSDevice(id="aa", name="Kitchen", address="10.0.0.1")))
+
+        ids = {
+            "bluos_aa_input",
+            "bluos_aa_sleep_timer",
+            "bluos_aa_source",
+            "bluos_aa_volume_db",
+            "bluos_aa_stream_quality",
+        }
+        assert ids <= {e["entity_id"] for e in api.available_entities.get_all()}
+        assert {driver._status_entity_id_to_device_id[i] for i in ids} == {"aa"}
+
+        run(driver._remove_player("aa"))
+        assert not ids & {e["entity_id"] for e in api.available_entities.get_all()}
+        assert "aa" not in driver._status_entities
+        assert not ids & driver._status_entity_id_to_device_id.keys()

@@ -13,6 +13,7 @@ import aiohttp
 from config import BluOSDevice
 from pyblu import Input, Player, Preset, Status, SyncStatus
 from pyblu.errors import PlayerError, PlayerUnreachableError
+from pyblu.parse import parse_status
 from pyee.asyncio import AsyncIOEventEmitter
 from yarl import URL as YarlURL
 
@@ -35,6 +36,56 @@ CONNECT_WAIT_FOR_COMMAND = 3.0
 # Preset command prefixes
 PRESET_LEGACY_PREFIX = "preset:"
 PRESET_COMMAND_PREFIX = "PRESET_"
+
+# Sleep timer steps in minutes. Each /Sleep call moves to the next step and
+# wraps from 90 back to 0 (off), so any step is reached within len() calls.
+SLEEP_TIMER_STEPS = (0, 15, 30, 45, 60, 90)
+
+# <quality> values in /Status. Lossy streams report a bitrate in bit/s instead.
+_QUALITY_LABELS: dict[str, str] = {
+    "cd": "CD",
+    "hd": "Hi-Res",
+    "dolbyAudio": "Dolby Audio",
+    "mqa": "MQA",
+    "mqaAuthored": "MQA Studio",
+}
+
+
+def parse_status_extras(body: bytes) -> dict[str, str]:
+    """
+    Read the /Status fields pyblu's ``Status`` does not expose.
+
+    Keys: ``quality`` (cd, hd, mqa, … or a bitrate in bit/s), ``stream_format``
+    (e.g. "FLAC 16/44.1") and ``service_name`` (display name, e.g. "TIDAL").
+    Missing fields are "". Never raises: the extras are cosmetic and must not
+    break a poll that pyblu already parsed successfully.
+    """
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        return {"quality": "", "stream_format": "", "service_name": ""}
+    status = root if root.tag == "status" else root.find(".//status")
+    if status is None:
+        status = root
+    return {
+        "quality": (status.findtext("quality") or "").strip(),
+        "stream_format": (status.findtext("streamFormat") or "").strip(),
+        "service_name": (status.findtext("serviceName") or "").strip(),
+    }
+
+
+def format_stream_quality(stream_format: str, quality: str) -> str:
+    """
+    Human-readable stream quality: the player's own format string when it
+    reports one ("FLAC 16/44.1"), otherwise a label for ``<quality>``.
+    """
+    if stream_format:
+        return stream_format
+    if not quality:
+        return ""
+    if quality.isdigit():
+        return f"{round(int(quality) / 1000)} kbps"
+    return _QUALITY_LABELS.get(quality, quality)
 
 
 class Events(StrEnum):
@@ -118,6 +169,8 @@ class BluOSPlayer:
         self._repeat_mode = RepeatMode.OFF
         self._sleep_timer = 0
         self._current_preset_name: str | None = None
+        # /Status fields pyblu does not parse (stream quality, service name).
+        self._status_extras: dict[str, str] = {}
 
         # Latest multi-room sync status, refreshed opportunistically on each poll.
         # Used to render the group sensor and to resolve current followers/leader.
@@ -299,6 +352,42 @@ class BluOSPlayer:
             YarlURL(full_url, encoded=True), timeout=aiohttp.ClientTimeout(total=timeout)
         ) as resp:
             resp.raise_for_status()
+
+    async def _fetch_status(
+        self, player: Player, etag: str | None, poll_timeout: int, timeout: float
+    ) -> tuple[Status, dict[str, str]]:
+        """
+        Long-poll /Status ourselves and return pyblu's ``Status`` plus the extras.
+
+        Same request as ``pyblu.Player.status()`` (``etag`` + ``timeout`` query
+        params; the player holds the request until the status changes or the
+        poll timeout passes), but we keep the raw body so we can also read the
+        fields pyblu drops (see ``parse_status_extras``). One request per poll,
+        exactly as before. Parsing still goes through pyblu's ``parse_status``.
+
+        Errors are mapped like pyblu's ``@_wrap_in_unreachable_error`` so the
+        poll loop's reconnect handling is unchanged: timeouts and connection
+        errors become ``PlayerUnreachableError``; other HTTP errors become
+        ``PlayerError`` (pyblu would let those escape as raw aiohttp errors).
+        """
+        params: dict[str, str] = {}
+        if etag is not None:
+            if poll_timeout >= timeout:
+                raise ValueError("poll_timeout has to be smaller than timeout")
+            params = {"etag": etag, "timeout": str(poll_timeout)}
+        try:
+            async with player._session.get(  # pylint: disable=protected-access
+                f"{player.base_url}/Status", params=params, timeout=aiohttp.ClientTimeout(total=timeout)
+            ) as resp:
+                resp.raise_for_status()
+                body = await resp.read()
+        except TimeoutError as e:
+            raise PlayerUnreachableError(f"Timeout during request: {e}") from e
+        except aiohttp.ClientConnectionError as e:
+            raise PlayerUnreachableError(f"Connection error: {e}") from e
+        except aiohttp.ClientError as e:
+            raise PlayerError(f"Status request failed: {e}") from e
+        return parse_status(body), parse_status_extras(body)
 
     async def _volume_worker(self) -> None:
         """Process volume commands from queue sequentially, collapsing rapid changes."""
@@ -556,7 +645,9 @@ class BluOSPlayer:
             poll_timeout = (
                 self._device.active_poll_timeout if self._state in active_states else self._device.standby_timeout
             )
-            status = await player.status(etag=etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5)
+            status, self._status_extras = await self._fetch_status(
+                player, etag, poll_timeout=poll_timeout, timeout=poll_timeout + 5
+            )
             self._last_etag = status.etag
 
             # Opportunistically refresh group membership alongside the status poll
@@ -639,9 +730,22 @@ class BluOSPlayer:
         if self._current_preset_name and not any(p.name == self._current_preset_name for p in self._presets):
             self._current_preset_name = None
 
+        state = self._map_state(status.state)
+        extras = self._status_extras
+        input_name = self._input_name(status.input_id)
+        stream_quality = ""
+        if state in (States.PLAYING, States.PAUSED, States.BUFFERING):
+            # A stopped player keeps reporting the last track's quality.
+            stream_quality = format_stream_quality(extras.get("stream_format", ""), extras.get("quality", ""))
+
         return {
-            "state": self._map_state(status.state),
+            "state": state,
             "volume": volume,
+            "volume_db": status.volume_db,
+            "sleep_timer": self._sleep_timer,
+            "input_name": input_name,
+            "service_name": input_name or extras.get("service_name") or status.service or "",
+            "stream_quality": stream_quality,
             "muted": muted,
             "media_title": status.name or "",
             "media_artist": status.artist or "",
@@ -655,6 +759,15 @@ class BluOSPlayer:
             "current_preset": self._current_preset_name,
             **self._group_info(status),
         }
+
+    def _input_name(self, input_id: str | None) -> str:
+        """Display name of the active physical input, or "" when streaming."""
+        if not input_id:
+            return ""
+        for inp in self._inputs:
+            if inp.id == input_id:
+                return inp.text or input_id
+        return ""
 
     def _group_info(self, status: Status) -> dict[str, Any]:
         """
@@ -695,7 +808,8 @@ class BluOSPlayer:
             return
         try:
             self._sync_status = await player.sync_status()
-        except (PlayerError, PlayerUnreachableError) as e:
+        except (PlayerError, aiohttp.ClientError) as e:
+            # pyblu lets HTTP status errors escape as raw aiohttp errors.
             _LOG.debug("Sync status refresh failed for %s: %s", self._device.name, e)
 
     @staticmethod
@@ -1116,6 +1230,51 @@ class BluOSPlayer:
         except PlayerError as e:
             _LOG.error("Toggle sleep timer failed: %s", e)
             return self._sleep_timer
+
+    async def set_sleep_timer(self, minutes: int) -> bool:
+        """
+        Set the sleep timer to one of ``SLEEP_TIMER_STEPS`` (0 = off).
+
+        BluOS only offers "next step" (/Sleep cycles 15→30→45→60→90→off), so we
+        step until the player reports the requested value. That takes at most
+        ``len(SLEEP_TIMER_STEPS)`` calls.
+        """
+        if minutes not in SLEEP_TIMER_STEPS:
+            _LOG.warning("Unsupported sleep timer value: %s", minutes)
+            return False
+        if not self._is_available():
+            return False
+        player = self._player
+        try:
+            for _ in range(len(SLEEP_TIMER_STEPS)):
+                if self._sleep_timer == minutes:
+                    break
+                self._sleep_timer = await player.sleep_timer()
+        except PlayerError as e:
+            _LOG.error("Set sleep timer failed: %s", e)
+            return False
+        self._schedule_poll()
+        if self._sleep_timer != minutes:
+            _LOG.warning("Sleep timer ended at %d instead of %d minutes", self._sleep_timer, minutes)
+            return False
+        return True
+
+    async def select_input(self, name: str) -> bool:
+        """Switch to a physical input by display name or id (never a preset)."""
+        if not self._is_available():
+            return False
+        for inp in self._inputs:
+            if name in (inp.text, inp.id):
+                try:
+                    await self._player.play_url(inp.url)
+                except PlayerError as e:
+                    _LOG.error("Select input failed: %s", e)
+                    return False
+                self._current_preset_name = None
+                self._schedule_poll()
+                return True
+        _LOG.warning("Input not found: %s", name)
+        return False
 
     # Browse and search methods
 

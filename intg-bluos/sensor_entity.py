@@ -1,4 +1,4 @@
-"""UC Sensor entity exposing BluOS multi-room group state."""
+"""UC Sensor entities for BluOS: group membership, source, volume (dB) and stream quality."""
 
 import logging
 from typing import Any, Callable
@@ -7,7 +7,7 @@ import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
 from entity_mixin import DiffPushMixin
-from ucapi.sensor import Attributes, DeviceClasses, States
+from ucapi.sensor import Attributes, DeviceClasses, Options, States
 
 _LOG = logging.getLogger(__name__)
 
@@ -99,3 +99,91 @@ class BluOSGroupSensor(DiffPushMixin, ucapi.Sensor):
             self.attributes.update(changed)
             return changed
         return {}
+
+
+class _BluOSValueSensor(DiffPushMixin, ucapi.Sensor):
+    """
+    Sensor showing one value from the player status.
+
+    Subclasses implement ``_value(attributes)``. Values are diffed, so a
+    sensor only pushes when its value actually changes.
+    """
+
+    def __init__(
+        self,
+        entity_id: str,
+        name: str,
+        device: BluOSDevice,
+        player: BluOSPlayer,
+        *,
+        unit: str | None = None,
+        options: dict[str, Any] | None = None,
+    ):
+        attributes: dict[str, Any] = {Attributes.STATE: States.UNAVAILABLE, Attributes.VALUE: ""}
+        if unit:
+            attributes[Attributes.UNIT] = unit
+        super().__init__(
+            entity_id,
+            name,
+            features=[],
+            attributes=attributes,
+            device_class=DeviceClasses.CUSTOM,
+            options=options,
+        )
+        self._device = device
+        self._player = player
+
+    def _value(self, attributes: dict[str, Any]) -> Any:
+        raise NotImplementedError
+
+    def update_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
+        """Return the attributes that changed for this status update."""
+        if not self._player.available:
+            return self._diff_attributes({Attributes.STATE: States.UNAVAILABLE, Attributes.VALUE: ""})
+        return self._diff_attributes({Attributes.STATE: States.ON, Attributes.VALUE: self._value(attributes)})
+
+    def set_unavailable(self) -> dict[str, Any]:
+        """Mark entity as unavailable and return changed attributes."""
+        if self.attributes.get(Attributes.STATE) != States.UNAVAILABLE:
+            changed = {Attributes.STATE: States.UNAVAILABLE, Attributes.VALUE: ""}
+            self.attributes.update(changed)
+            return changed
+        return {}
+
+
+class BluOSSourceSensor(_BluOSValueSensor):
+    """What is playing from: the input name ("Bluetooth") or service ("TIDAL")."""
+
+    def __init__(self, device: BluOSDevice, player: BluOSPlayer):
+        super().__init__(f"bluos_{device.id}_source", f"{device.name} Source", device, player)
+
+    def _value(self, attributes: dict[str, Any]) -> Any:
+        return attributes.get("service_name") or ""
+
+
+class BluOSVolumeSensor(_BluOSValueSensor):
+    """Volume in dB as reported by the player."""
+
+    def __init__(self, device: BluOSDevice, player: BluOSPlayer):
+        super().__init__(
+            f"bluos_{device.id}_volume_db",
+            f"{device.name} Volume",
+            device,
+            player,
+            unit="dB",
+            options={Options.CUSTOM_UNIT: "dB", Options.DECIMALS: 1},
+        )
+
+    def _value(self, attributes: dict[str, Any]) -> Any:
+        value = attributes.get("volume_db")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else ""
+
+
+class BluOSStreamQualitySensor(_BluOSValueSensor):
+    """Stream format, e.g. "FLAC 16/44.1", "MQA" or "320 kbps"; empty when stopped."""
+
+    def __init__(self, device: BluOSDevice, player: BluOSPlayer):
+        super().__init__(f"bluos_{device.id}_stream_quality", f"{device.name} Stream Quality", device, player)
+
+    def _value(self, attributes: dict[str, Any]) -> Any:
+        return attributes.get("stream_quality") or ""

@@ -45,6 +45,29 @@ class BluOSDevice:
         )
 
 
+def _validate_devices(devices: list[BluOSDevice]) -> None:
+    """
+    Reject imported devices that could never work.
+
+    Raises:
+        ValueError: on an empty id/name/address, a non-numeric port or
+            timeout, or a duplicate id
+    """
+    seen: set[str] = set()
+    for device in devices:
+        for field in ("id", "name", "address"):
+            value = getattr(device, field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"device field '{field}' must be a non-empty string")
+        for field in ("port", "volume_step", "standby_timeout", "active_poll_timeout", "timeout"):
+            value = getattr(device, field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"device field '{field}' must be a number")
+        if device.id in seen:
+            raise ValueError(f"duplicate device id '{device.id}'")
+        seen.add(device.id)
+
+
 class Devices:
     """Manager for configured BluOS devices."""
 
@@ -53,6 +76,7 @@ class Devices:
         data_path: str,
         add_handler: Callable[[BluOSDevice], None] | None = None,
         remove_handler: Callable[[str], None] | None = None,
+        update_handler: Callable[[BluOSDevice], None] | None = None,
     ):
         """
         Initialize device manager.
@@ -61,12 +85,15 @@ class Devices:
             data_path: Directory for storing configuration
             add_handler: Callback when device is added
             remove_handler: Callback when device is removed
+            update_handler: Callback when an existing device's settings change
+                during import (the running player must pick them up)
         """
         self._data_path = data_path
         self._config_file = os.path.join(data_path, "config.json")
         self._devices: dict[str, BluOSDevice] = {}
         self._add_handler = add_handler
         self._remove_handler = remove_handler
+        self._update_handler = update_handler
 
     @property
     def data_path(self) -> str:
@@ -215,49 +242,74 @@ class Devices:
         Import configuration from a JSON string.
 
         Parses and validates all devices before touching the current state,
-        then replaces all existing devices with the imported ones. Fires
-        remove callbacks for every deleted device and add callbacks for every
-        new device. Writes to disk exactly once at the end (not N+1 times).
+        then makes the configuration equal to the imported one by diffing:
+
+        - devices missing from the import are removed (remove callback),
+        - new devices are added (add callback),
+        - devices whose settings changed are replaced in place (update
+          callback, so the driver restarts that one player in a single task),
+        - identical devices are left alone — no reconnect, entities untouched.
+
+        Diffing (instead of remove-everything-then-add) avoids racing a remove
+        and an add task for the same device id, and keeps restored players that
+        did not change fully running. Writes to disk exactly once.
 
         Args:
             json_str: JSON string in the same format as exported by export()
+                (``{"devices": [...]}``); a bare list of devices is accepted too.
 
         Returns:
             True if import succeeded, False on parse/validation error
         """
         try:
             data = json.loads(json_str)
-            new_devices = [BluOSDevice.from_dict(d) for d in data.get("devices", [])]
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            if isinstance(data, list):
+                device_list = data
+            elif isinstance(data, dict) and isinstance(data.get("devices", []), list):
+                device_list = data.get("devices", [])
+            else:
+                raise TypeError("expected an object with a 'devices' list")
+            new_devices = [BluOSDevice.from_dict(d) for d in device_list]
+            _validate_devices(new_devices)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             _LOG.error("Invalid configuration format: %s", e)
             return False
 
-        snapshot = dict(self._devices)
-        try:
-            # Fire remove callbacks for every existing device, then replace in-memory
-            # state and fire add callbacks — without calling store() on each iteration.
-            old_ids = list(self._devices.keys())
-            for device_id in old_ids:
-                device = self._devices.pop(device_id)
-                if self._remove_handler:
-                    _LOG.info("Device removed: %s (%s)", device.name, device_id)
-                    self._remove_handler(device_id)
+        imported = {d.id: d for d in new_devices}
+        removed = [device_id for device_id in self._devices if device_id not in imported]
+        added = [d for d in new_devices if d.id not in self._devices]
+        updated = [d for d in new_devices if d.id in self._devices and self._devices[d.id] != d]
 
-            for device in new_devices:
-                is_new = device.id not in self._devices
-                self._devices[device.id] = device
-                if is_new and self._add_handler:
-                    _LOG.info("Device added: %s (%s)", device.name, device.id)
-                    self._add_handler(device)
-
-            self.store()  # single write
-            _LOG.info("Imported %d device(s)", len(new_devices))
-            return True
-        except Exception as e:  # pylint: disable=broad-except
-            _LOG.error("Failed to apply imported configuration: %s", e)
+        # Swap the in-memory state and persist once, before any callback runs,
+        # so handlers observe the final configuration.
+        snapshot = self._devices
+        self._devices = dict(imported)
+        if not self.store():
             self._devices = snapshot
-            self.store()
             return False
+
+        for device_id in removed:
+            _LOG.info("Device removed: %s (%s)", snapshot[device_id].name, device_id)
+            if self._remove_handler:
+                self._remove_handler(device_id)
+        for device in added:
+            _LOG.info("Device added: %s (%s)", device.name, device.id)
+            if self._add_handler:
+                self._add_handler(device)
+        for device in updated:
+            _LOG.info("Device updated: %s (%s)", device.name, device.id)
+            if self._update_handler:
+                self._update_handler(device)
+
+        _LOG.info(
+            "Imported %d device(s): %d added, %d updated, %d removed, %d unchanged",
+            len(new_devices),
+            len(added),
+            len(updated),
+            len(removed),
+            len(new_devices) - len(added) - len(updated),
+        )
+        return True
 
     def __len__(self) -> int:
         """Return number of configured devices."""

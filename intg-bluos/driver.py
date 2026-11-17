@@ -151,8 +151,29 @@ def _on_device_removed(device_id: str) -> None:
     _create_task(_remove_player(device_id))
 
 
-async def _add_player(device: BluOSDevice) -> None:
-    """Add a BluOS player."""
+def _on_device_updated(device: BluOSDevice) -> None:
+    """Handle changed settings of an existing device (e.g. from a restore)."""
+    _LOG.info("Device updated: %s", device.name)
+    _create_task(_restart_player(device))
+
+
+def _device_entities(device_id: str) -> list[ucapi.Entity]:
+    """All UC entities currently registered for a device."""
+    stores = (_entities, _select_entities, _sensor_entities, _remote_entities)
+    return [store[device_id] for store in stores if device_id in store]
+
+
+async def _add_player(device: BluOSDevice, keep_configured: frozenset[str] = frozenset()) -> None:
+    """
+    Add a BluOS player.
+
+    Args:
+        device: device configuration
+        keep_configured: entity ids the Remote had subscribed before a restart.
+            Their new entity objects are put into ``configured_entities``
+            before connecting, so commands reach the new player and the
+            initial state push after connect is delivered.
+    """
     if device.id in _configured_players:
         _LOG.debug("Player already exists: %s", device.id)
         return
@@ -211,6 +232,11 @@ async def _add_player(device: BluOSDevice) -> None:
     api.available_entities.add(remote_entity)
 
     _LOG.info("Registered remote entity: %s", remote_entity.id)
+
+    for new_entity in (entity, select_entity, sensor_entity, remote_entity):
+        if new_entity.id in keep_configured:
+            api.configured_entities.remove(new_entity.id)
+            api.configured_entities.add(new_entity)
 
     # The newly added device is now a grouping target for every previously
     # configured player, so regenerate all entities' simple commands.
@@ -657,9 +683,19 @@ async def _on_unsubscribe_entities(entity_ids: list[str]) -> None:
 
 
 async def _restart_player(device: BluOSDevice) -> None:
-    """Remove and re-add a player so updated config takes effect immediately."""
+    """
+    Remove and re-add a player so updated config takes effect immediately.
+
+    ucapi dispatches commands to the entity objects in ``configured_entities``
+    (copied there on subscribe). Recreating the entities would otherwise leave
+    the Remote's subscriptions without an entity until it resubscribes, so the
+    subscribed ids are carried over to the new entity objects.
+    """
+    keep_configured = frozenset(
+        e.id for e in _device_entities(device.id) if api.configured_entities.get(e.id) is not None
+    )
     await _remove_player(device.id)
-    await _add_player(device)
+    await _add_player(device, keep_configured=keep_configured)
 
 
 async def _setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
@@ -719,6 +755,7 @@ async def _main() -> None:
         config_home,
         add_handler=_on_device_added,
         remove_handler=_on_device_removed,
+        update_handler=_on_device_updated,
     )
     _devices.load()
     setup_flow.set_devices(_devices)

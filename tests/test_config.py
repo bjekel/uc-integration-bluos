@@ -294,6 +294,90 @@ class TestDevices:
         remove_handler.assert_called_once_with("old")
         assert add_handler.call_count == 2
 
+    def test_import_config_diffs_instead_of_replacing(self, temp_dir):
+        """Unchanged devices are untouched, changed ones updated, others added/removed."""
+        add_handler, remove_handler, update_handler = MagicMock(), MagicMock(), MagicMock()
+        devices = Devices(
+            temp_dir, add_handler=add_handler, remove_handler=remove_handler, update_handler=update_handler
+        )
+        devices.add_or_update(BluOSDevice(id="same", name="Same", address="10.0.0.1"))
+        devices.add_or_update(BluOSDevice(id="changed", name="Changed", address="10.0.0.2"))
+        devices.add_or_update(BluOSDevice(id="gone", name="Gone", address="10.0.0.3"))
+        add_handler.reset_mock()
+
+        result = devices.import_config(
+            json.dumps(
+                {
+                    "devices": [
+                        {"id": "same", "name": "Same", "address": "10.0.0.1"},
+                        {"id": "changed", "name": "Changed", "address": "10.0.0.22", "volume_step": 2},
+                        {"id": "new", "name": "New", "address": "10.0.0.4"},
+                    ]
+                }
+            )
+        )
+
+        assert result is True
+        assert [d.id for d in devices.all()] == ["same", "changed", "new"]
+        remove_handler.assert_called_once_with("gone")
+        add_handler.assert_called_once()
+        assert add_handler.call_args.args[0].id == "new"
+        update_handler.assert_called_once()
+        assert update_handler.call_args.args[0] == BluOSDevice(
+            id="changed", name="Changed", address="10.0.0.22", volume_step=2
+        )
+        # Persisted once with the final state.
+        on_disk = json.loads(open(os.path.join(temp_dir, "config.json"), encoding="utf-8").read())
+        assert [d["id"] for d in on_disk["devices"]] == ["same", "changed", "new"]
+
+    def test_import_identical_config_fires_no_callbacks(self, temp_dir):
+        """Restoring the current config is a no-op for the running players."""
+        add_handler, remove_handler, update_handler = MagicMock(), MagicMock(), MagicMock()
+        devices = Devices(
+            temp_dir, add_handler=add_handler, remove_handler=remove_handler, update_handler=update_handler
+        )
+        devices.add_or_update(BluOSDevice(id="a", name="A", address="10.0.0.1"))
+        add_handler.reset_mock()
+
+        assert devices.import_config(devices.export()) is True
+
+        add_handler.assert_not_called()
+        remove_handler.assert_not_called()
+        update_handler.assert_not_called()
+
+    def test_handlers_see_final_state(self, temp_dir):
+        """Callbacks run after the in-memory state is swapped."""
+        seen = []
+        devices = Devices(temp_dir, remove_handler=lambda _id: seen.append([d.id for d in devices.all()]))
+        devices.add_or_update(BluOSDevice(id="a", name="A", address="10.0.0.1"))
+
+        devices.import_config(json.dumps([{"id": "b", "name": "B", "address": "10.0.0.2"}]))
+
+        assert seen == [["b"]]
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"id": "", "name": "X", "address": "10.0.0.1"},
+            {"id": "x", "name": "  ", "address": "10.0.0.1"},
+            {"id": "x", "name": "X", "address": 5},
+            {"id": "x", "name": "X", "address": "10.0.0.1", "port": "11000"},
+            {"id": "x", "name": "X", "address": "10.0.0.1", "timeout": True},
+        ],
+    )
+    def test_import_rejects_invalid_fields(self, devices, entry):
+        devices.add_or_update(BluOSDevice(id="keep", name="Keep", address="10.0.0.9"))
+
+        assert devices.import_config(json.dumps([entry])) is False
+        assert [d.id for d in devices.all()] == ["keep"]
+
+    def test_import_rejects_duplicate_ids(self, devices):
+        payload = json.dumps(
+            [{"id": "x", "name": "A", "address": "10.0.0.1"}, {"id": "x", "name": "B", "address": "10.0.0.2"}]
+        )
+        assert devices.import_config(payload) is False
+        assert len(devices) == 0
+
     def test_import_config_invalid_json(self, devices):
         """Test that import_config returns False and leaves state unchanged on invalid JSON."""
         device = BluOSDevice(id="test", name="Test Device", address="192.168.1.100")

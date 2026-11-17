@@ -46,6 +46,7 @@ remote_entity.py # UC Remote entity — bindable command surface, delegates to m
 config.py        # device config dataclass, JSON persistence, device manager with callbacks
 discover.py      # mDNS discovery on _musc._tcp.local
 setup_flow.py    # setup wizard state machine (auto-discover or manual IP)
+i18n.py          # translations: _a()/_am() build {"en","de","nl"} dicts from locales/*.po
 ```
 
 **Data flow:** `driver.py` creates a `BluOSPlayer` (bluos.py) per device and listens to its events (`CONNECTED`, `DISCONNECTED`, `UPDATE`). It also creates the UC entities (`BluOSMediaPlayer`, `BluOSPresetSelect`, `BluOSGroupSensor`, `BluOSRemote`) per device and routes incoming UC Remote commands to the appropriate player. The `BluOSRemote` delegates command execution to the device's `BluOSMediaPlayer` so there is a single command-dispatch path. A background poller task calls `player.poll_status()` using long-polling with etag support.
@@ -61,6 +62,30 @@ setup_flow.py    # setup wizard state machine (auto-discover or manual IP)
 **Attribute change tracking:** Entities only push attributes to the UC Remote when values change. Each entity tracks `_last_attributes` to detect diffs. Media info is cleared on OFF/STANDBY/UNAVAILABLE transitions.
 
 **Reconnection:** Exponential backoff (1s → 30s max) via `_schedule_reconnect()`. Long-polling uses configurable timeout (default 60s in standby).
+
+**Reconfigure screen (keep the field ids stable):** follows the official UC /
+`ucapi-framework` convention — a `choice` dropdown (configured devices; dummy
+`""` entry when empty) followed by an `action` dropdown (`add`, `configure`,
+`remove`, `reset`, `backup`, `restore`). The community Integration Manager
+(JackJPowell/uc-intg-manager) automates backups against these ids: it submits
+`{"choice", "action": "backup"}` in one step, reads the `backup_data` textarea
+and then aborts the setup — so the backup screen must never modify config.
+Restore reads the `restore_data` textarea and re-shows the screen with an error
+on invalid input. `Devices.import_config` *diffs* against the current config:
+removed devices are removed, new ones added, changed ones restarted in one task
+(`update_handler` → `_restart_player`), identical ones left running. Never go
+back to remove-all-then-add — it races a remove and an add task for the same id.
+`_restart_player` carries the Remote's subscriptions over to the recreated
+entity objects (ucapi dispatches commands to the objects in
+`configured_entities`, so a stale one would talk to the old, closed player). `configure` keeps the device id (entity ids and the user's
+activities stay intact) and the driver restarts the player.
+
+**Translations:** all setup texts go through `i18n._a("English text")`. Add the
+string to every file in `intg-bluos/locales/` (`de.po`, `nl.po`); a test fails
+if any setup string lacks a translation. The `.po` files are parsed at runtime
+(no `msgfmt` step) and bundled via `--add-data intg-bluos/locales:locales` in
+every PyInstaller invocation (devenv scripts, `driver.spec`, Gitea build).
+`driver.json` is static, so its `nl`/`de` texts are maintained by hand.
 
 **Browse/search:** XML responses from BluOS are parsed with ElementTree. `play_url` is cached by `browseKey` for items that are both browsable and playable. Search requires a `search_key` from the parent browse response.
 
@@ -82,6 +107,22 @@ wakes to zero. Follow these rules:
   a play/pause/stop transition, or an explicit skip/seek. The throttle lives in
   `BluOSMediaPlayer.update_attributes`; keep `self.attributes` tracking the real
   position so FAST_FORWARD/REWIND/SEEK math stays correct even when not pushed.
+- **`media_position_updated_at` travels with every position.** Whenever
+  `media_position` is pushed, `update_attributes` adds
+  `media_position_updated_at` (ISO-8601 UTC, the moment the position was
+  sampled), so the Remote interpolates the progress bar from the real sample
+  time instead of from when the message arrived or when it woke up to process
+  it. This matters more *because* we push position so rarely: each push has to
+  anchor the bar correctly for a long stretch. Rules:
+  - Never push the timestamp on its own — it only rides along with a position
+    push that happens anyway, so it adds zero wakes.
+  - When a position is throttled (kept local, not pushed), update the timestamp
+    locally too. ucapi answers entity-state requests straight from
+    `self.attributes`; a fresh position paired with a stale timestamp would make
+    the Remote extrapolate too far ahead.
+  - The official Apple TV / Android TV integrations, Kodi and `ucapi-framework`
+    all send this attribute; tests in `tests/test_media_player.py` cover the
+    pairing and the "no extra push" guarantee.
 - **Always diff before pushing.** Entities compute changed attributes against
   `self.attributes` (the dict ucapi keeps in sync with the Remote) and the
   driver only calls `update_attributes(entity_id, changed)` when `changed` is

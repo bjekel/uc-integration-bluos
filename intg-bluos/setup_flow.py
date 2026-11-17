@@ -1,4 +1,18 @@
-"""Setup flow for BluOS integration."""
+"""
+Setup flow for BluOS integration.
+
+Reconfiguration follows the convention shared by the official Unfolded Circle
+integrations and ``ucapi-framework``: a configuration-mode screen with a
+``choice`` dropdown (configured devices) and an ``action`` dropdown (add,
+configure, remove, reset, backup, restore).
+
+Backup/restore uses the field ids the community Integration Manager
+(JackJPowell/uc-intg-manager) automates: it starts a reconfigure, reads the
+``choice`` dropdown value, submits ``{"choice": ..., "action": "backup"}`` in a
+single step, reads the ``backup_data`` textarea and then aborts the setup. The
+backup screen must therefore never modify the configuration. Restore reads the
+``restore_data`` textarea (ucapi-framework naming).
+"""
 
 import ipaddress
 import logging
@@ -7,6 +21,7 @@ from typing import Any
 
 from config import BluOSDevice
 from discover import DiscoveredDevice, discover_bluos_players
+from i18n import _a, _am
 from ucapi import (
     AbortDriverSetup,
     DriverSetupRequest,
@@ -22,6 +37,12 @@ from ucapi import (
 MIN_PORT = 1
 MAX_PORT = 65535
 DEFAULT_BLUOS_PORT = 11000
+
+# Device configuration defaults (mirrors BluOSDevice)
+DEFAULT_VOLUME_STEP = 5
+DEFAULT_TIMEOUT = 5.0
+DEFAULT_STANDBY_TIMEOUT = 60
+DEFAULT_ACTIVE_POLL_TIMEOUT = 30
 
 _LOG = logging.getLogger(__name__)
 
@@ -48,19 +69,22 @@ class SetupSteps(IntEnum):
     DISCOVER = 2
     DEVICE_CHOICE = 3
     DEVICE_CONFIGURE = 4
-    BACKUP_RESTORE = 5
+    BACKUP = 5
+    RESTORE = 6
 
 
 # Global setup state
 _setup_step = SetupSteps.INIT
 _discovered_devices: list[DiscoveredDevice] = []
 _selected_device: DiscoveredDevice | None = None
+# Existing device being edited via the "configure" action (None when adding).
+_editing_device: BluOSDevice | None = None
 _configured_device: BluOSDevice | None = None
 _devices_ref = None  # set by driver.py via set_devices()
 
 
 def set_devices(devices) -> None:
-    """Set the Devices instance for backup/restore access."""
+    """Set the Devices instance for configure/remove/backup/restore access."""
     global _devices_ref
     _devices_ref = devices
 
@@ -73,6 +97,14 @@ def get_configured_device() -> BluOSDevice | None:
     return device
 
 
+def _reset_state() -> None:
+    global _setup_step, _discovered_devices, _selected_device, _editing_device
+    _setup_step = SetupSteps.INIT
+    _discovered_devices = []
+    _selected_device = None
+    _editing_device = None
+
+
 async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
     """
     Handle setup driver messages.
@@ -83,12 +115,8 @@ async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
     Returns:
         Setup action response
     """
-    global _setup_step, _discovered_devices, _selected_device
-
     if isinstance(msg, DriverSetupRequest):
-        _setup_step = SetupSteps.INIT
-        _discovered_devices = []
-        _selected_device = None
+        _reset_state()
         return await _handle_setup_request(msg)
 
     if isinstance(msg, UserDataResponse):
@@ -96,7 +124,7 @@ async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
 
     if isinstance(msg, AbortDriverSetup):
         _LOG.info("Setup aborted")
-        _setup_step = SetupSteps.INIT
+        _reset_state()
         return SetupComplete()
 
     _LOG.error("Unknown setup message: %s", type(msg))
@@ -128,8 +156,6 @@ async def _handle_setup_request(msg: DriverSetupRequest) -> SetupAction:
 
 async def _handle_user_data(msg: UserDataResponse) -> SetupAction:
     """Handle user data response."""
-    global _setup_step
-
     match _setup_step:
         case SetupSteps.CONFIGURATION_MODE:
             return await _handle_configuration_mode(msg)
@@ -139,152 +165,218 @@ async def _handle_user_data(msg: UserDataResponse) -> SetupAction:
             return await _handle_device_choice(msg)
         case SetupSteps.DEVICE_CONFIGURE:
             return await _handle_device_configure(msg)
-        case SetupSteps.BACKUP_RESTORE:
-            return await _handle_backup_restore(msg)
+        case SetupSteps.BACKUP:
+            # The user has seen (and copied) the backup; nothing to change.
+            _reset_state()
+            return SetupComplete()
+        case SetupSteps.RESTORE:
+            return await _handle_restore(msg)
         case _:
             _LOG.error("Unexpected setup step: %s", _setup_step)
             return SetupError()
 
 
+# ---------------------------------------------------------------------------
+# Configuration mode (reconfigure)
+# ---------------------------------------------------------------------------
+
+
+def _configured_devices() -> list[BluOSDevice]:
+    return _devices_ref.all() if _devices_ref is not None else []
+
+
 def _show_configuration_mode() -> SetupAction:
-    """Show configuration mode selection."""
+    """Show the configured-device list and the available actions."""
+    devices = _configured_devices()
+
+    device_items = [{"id": d.id, "label": {"en": f"{d.name} ({d.address})"}} for d in devices]
+    actions = [{"id": "add", "label": _a("Add a new device")}]
+    if devices:
+        actions += [
+            {"id": "configure", "label": _a("Configure selected device")},
+            {"id": "remove", "label": _a("Remove selected device")},
+            {"id": "reset", "label": _a("Reset configuration")},
+            {"id": "backup", "label": _a("Backup configuration")},
+        ]
+    else:
+        # Dummy entry: the dropdown must not be empty.
+        device_items.append({"id": "", "label": {"en": "---"}})
+    actions.append({"id": "restore", "label": _a("Restore configuration from backup")})
+
     return RequestUserInput(
-        {"en": "BluOS Configuration", "de": "BluOS Konfiguration"},
+        _a("BluOS Configuration"),
         [
             {
+                "id": "choice",
+                "label": _a("Configured devices"),
+                "field": {"dropdown": {"value": device_items[0]["id"], "items": device_items}},
+            },
+            {
                 "id": "action",
-                "label": {"en": "Action", "de": "Aktion"},
-                "field": {
-                    "dropdown": {
-                        "value": "add",
-                        "items": [
-                            {
-                                "id": "add",
-                                "label": {
-                                    "en": "Add new device",
-                                    "de": "Neues Gerät hinzufügen",
-                                },
-                            },
-                            {
-                                "id": "backup_restore",
-                                "label": {
-                                    "en": "Backup / Restore configuration",
-                                    "de": "Konfiguration sichern / wiederherstellen",
-                                },
-                            },
-                            {
-                                "id": "reset",
-                                "label": {
-                                    "en": "Reset configuration",
-                                    "de": "Konfiguration zurücksetzen",
-                                },
-                            },
-                        ],
-                    }
-                },
-            }
+                "label": _a("Action"),
+                "field": {"dropdown": {"value": actions[0]["id"], "items": actions}},
+            },
         ],
     )
 
 
 async def _handle_configuration_mode(msg: UserDataResponse) -> SetupAction:
     """Handle configuration mode selection."""
-    global _setup_step
+    global _setup_step, _editing_device
 
     action = msg.input_values.get("action", "add")
+    choice = msg.input_values.get("choice", "")
 
-    if action == "reset":
-        if _devices_ref is not None:
-            _devices_ref.clear()
-        _setup_step = SetupSteps.INIT
-        return SetupComplete()
+    match action:
+        case "add":
+            _setup_step = SetupSteps.DISCOVER
+            return _show_discovery_options()
 
-    if action == "backup_restore":
-        _setup_step = SetupSteps.BACKUP_RESTORE
-        return _show_backup_restore_step()
+        case "configure":
+            device = _devices_ref.get(choice) if _devices_ref is not None and choice else None
+            if device is None:
+                _LOG.warning("Configure: device '%s' not found", choice)
+                return SetupError()
+            _editing_device = device
+            _setup_step = SetupSteps.DEVICE_CONFIGURE
+            return _show_device_configure()
 
-    # Add new device - start discovery
-    _setup_step = SetupSteps.DISCOVER
-    return _show_discovery_options()
+        case "remove":
+            if _devices_ref is None or not choice or not _devices_ref.remove(choice):
+                _LOG.warning("Remove: device '%s' not found", choice)
+                return SetupError()
+            _LOG.info("Device removed via setup: %s", choice)
+            _reset_state()
+            return SetupComplete()
+
+        case "reset":
+            if _devices_ref is not None:
+                _devices_ref.clear()
+            _reset_state()
+            return SetupComplete()
+
+        case "backup":
+            _setup_step = SetupSteps.BACKUP
+            return _show_backup()
+
+        case "restore":
+            _setup_step = SetupSteps.RESTORE
+            return _show_restore()
+
+    _LOG.warning("Unknown configuration action: %s", action)
+    return SetupError()
 
 
-def _show_backup_restore_step() -> SetupAction:
-    """Show backup/restore textarea pre-filled with current configuration JSON."""
-    current = _devices_ref.export() if _devices_ref else '{"devices": []}'
+# ---------------------------------------------------------------------------
+# Backup / restore
+# ---------------------------------------------------------------------------
+
+
+def _show_backup() -> SetupAction:
+    """Show the current configuration as JSON in the ``backup_data`` textarea."""
+    current = _devices_ref.export() if _devices_ref is not None else '{"devices": []}'
     return RequestUserInput(
-        {"en": "Backup / Restore", "de": "Sichern / Wiederherstellen"},
+        _a("Backup configuration"),
         [
             {
-                "id": "config",
-                "label": {
-                    "en": "Devices configuration (copy to back up, paste to restore; "
-                    "all existing devices will be replaced)",
-                    "de": "Gerätekonfiguration (kopieren zum Sichern, einfügen zum "
-                    "Wiederherstellen; alle vorhandenen Geräte werden ersetzt)",
+                "id": "info",
+                "label": _a("Backup"),
+                "field": {
+                    "label": {
+                        "value": _a(
+                            "Copy the configuration below and keep it somewhere safe. "
+                            "Use 'Restore configuration from backup' to load it again."
+                        )
+                    }
                 },
+            },
+            {
+                "id": "backup_data",
+                "label": _a("Configuration"),
                 "field": {"textarea": {"value": current}},
-            }
+            },
         ],
     )
 
 
-async def _handle_backup_restore(msg: UserDataResponse) -> SetupAction:
-    """Apply configuration from backup/restore textarea."""
-    global _setup_step
+def _show_restore(error: bool = False) -> SetupAction:
+    """Show the ``restore_data`` textarea, optionally with a parse error notice."""
+    settings: list[dict[str, Any]] = []
+    if error:
+        settings.append(
+            {
+                "id": "error",
+                "label": _a("Error"),
+                "field": {"label": {"value": _a("The configuration could not be read. Please paste a valid backup.")}},
+            }
+        )
+    settings += [
+        {
+            "id": "info",
+            "label": _a("Restore"),
+            "field": {
+                "label": {"value": _a("Paste a previously saved backup. All configured devices will be replaced.")}
+            },
+        },
+        {
+            "id": "restore_data",
+            "label": _a("Configuration"),
+            "field": {"textarea": {"value": ""}},
+        },
+    ]
+    return RequestUserInput(_a("Restore configuration"), settings)
 
-    json_str = msg.input_values.get("config", "").strip()
-    if not json_str:
-        return SetupError()
 
+async def _handle_restore(msg: UserDataResponse) -> SetupAction:
+    """Validate and apply a pasted backup."""
     if _devices_ref is None:
-        _LOG.error("Devices not initialised during backup restore")
+        _LOG.error("Devices not initialised during restore")
         return SetupError()
 
-    if _devices_ref.import_config(json_str):
-        _LOG.info("Configuration restored successfully")
-        _setup_step = SetupSteps.INIT
-        return SetupComplete()
+    json_str = (msg.input_values.get("restore_data") or "").strip()
+    if not json_str or not _devices_ref.import_config(json_str):
+        _LOG.warning("Restore failed: invalid configuration data")
+        return _show_restore(error=True)
 
-    _LOG.warning("Failed to restore configuration")
-    return SetupError()
+    _LOG.info("Configuration restored successfully")
+    _reset_state()
+    return SetupComplete()
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+
+def _manual_port_field(value: int = DEFAULT_BLUOS_PORT) -> dict[str, Any]:
+    return {
+        "id": "manual_port",
+        "label": _a("Port"),
+        "field": {"number": {"value": value, "min": MIN_PORT, "max": MAX_PORT, "steps": 1}},
+    }
 
 
 def _show_discovery_options() -> SetupAction:
     """Show discovery options."""
     return RequestUserInput(
-        {"en": "Device Discovery", "de": "Geräteerkennung"},
+        _a("Device Discovery"),
         [
             {
                 "id": "discovery_mode",
-                "label": {"en": "Discovery Method", "de": "Erkennungsmethode"},
+                "label": _a("Discovery Method"),
                 "field": {
                     "dropdown": {
                         "value": "auto",
                         "items": [
-                            {
-                                "id": "auto",
-                                "label": {
-                                    "en": "Auto-discover (recommended)",
-                                    "de": "Automatisch erkennen (empfohlen)",
-                                },
-                            },
-                            {
-                                "id": "manual",
-                                "label": {
-                                    "en": "Manual IP entry",
-                                    "de": "Manuelle IP-Eingabe",
-                                },
-                            },
+                            {"id": "auto", "label": _a("Auto-discover (recommended)")},
+                            {"id": "manual", "label": _a("Manual IP entry")},
                         ],
                     }
                 },
             },
             {
                 "id": "manual_address",
-                "label": {
-                    "en": "IP Address (for manual entry)",
-                    "de": "IP-Adresse (für manuelle Eingabe)",
-                },
+                "label": _a("IP Address (for manual entry)"),
                 "field": {"text": {"value": ""}},
             },
         ],
@@ -294,31 +386,14 @@ def _show_discovery_options() -> SetupAction:
 def _show_manual_entry() -> SetupAction:
     """Show manual IP/port entry form."""
     return RequestUserInput(
-        {"en": "Manual Device Entry", "de": "Manuelle Geräteeingabe"},
+        _a("Manual Device Entry"),
         [
             {
                 "id": "manual_address",
-                "label": {
-                    "en": "IP Address",
-                    "de": "IP-Adresse",
-                },
+                "label": _a("IP Address"),
                 "field": {"text": {"value": ""}},
             },
-            {
-                "id": "manual_port",
-                "label": {
-                    "en": "Port",
-                    "de": "Port",
-                },
-                "field": {
-                    "number": {
-                        "value": DEFAULT_BLUOS_PORT,
-                        "min": MIN_PORT,
-                        "max": MAX_PORT,
-                        "steps": 1,
-                    }
-                },
-            },
+            _manual_port_field(),
         ],
     )
 
@@ -332,36 +407,18 @@ async def _start_discovery() -> SetupAction:
 
     if not _discovered_devices:
         return RequestUserInput(
-            {"en": "No Devices Found", "de": "Keine Geräte gefunden"},
+            _a("No Devices Found"),
             [
                 {
                     "id": "retry",
-                    "label": {
-                        "en": "No BluOS devices found. Try again?",
-                        "de": "Keine BluOS-Geräte gefunden. Erneut versuchen?",
-                    },
+                    "label": _a("No BluOS devices found. Try again?"),
                     "field": {
                         "dropdown": {
                             "value": "yes",
                             "items": [
-                                {
-                                    "id": "yes",
-                                    "label": {
-                                        "en": "Yes, try again",
-                                        "de": "Ja, erneut versuchen",
-                                    },
-                                },
-                                {
-                                    "id": "manual",
-                                    "label": {
-                                        "en": "Enter IP manually",
-                                        "de": "IP manuell eingeben",
-                                    },
-                                },
-                                {
-                                    "id": "no",
-                                    "label": {"en": "Cancel", "de": "Abbrechen"},
-                                },
+                                {"id": "yes", "label": _a("Yes, try again")},
+                                {"id": "manual", "label": _a("Enter IP manually")},
+                                {"id": "no", "label": _a("Cancel")},
                             ],
                         }
                     },
@@ -396,40 +453,18 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
         if not _is_valid_ip_address(manual_address):
             _LOG.warning("Invalid IP address format: %s", manual_address)
             return RequestUserInput(
-                {"en": "Invalid IP Address", "de": "Ungültige IP-Adresse"},
+                _a("Invalid IP Address"),
                 [
                     {
                         "id": "manual_address",
-                        "label": {
-                            "en": "Please enter a valid IP address",
-                            "de": "Bitte geben Sie eine gültige IP-Adresse ein",
-                        },
+                        "label": _a("Please enter a valid IP address"),
                         "field": {"text": {"value": manual_address}},
                     },
-                    {
-                        "id": "manual_port",
-                        "label": {"en": "Port", "de": "Port"},
-                        "field": {
-                            "number": {
-                                "value": DEFAULT_BLUOS_PORT,
-                                "min": MIN_PORT,
-                                "max": MAX_PORT,
-                                "steps": 1,
-                            }
-                        },
-                    },
+                    _manual_port_field(),
                 ],
             )
 
-        # Parse and validate port
-        try:
-            manual_port = int(msg.input_values.get("manual_port", DEFAULT_BLUOS_PORT))
-        except (ValueError, TypeError):
-            manual_port = DEFAULT_BLUOS_PORT
-
-        if not _is_valid_port(manual_port):
-            _LOG.warning("Invalid port: %s", manual_port)
-            manual_port = DEFAULT_BLUOS_PORT
+        manual_port = _parse_port(msg.input_values.get("manual_port"))
 
         _discovered_devices = [
             DiscoveredDevice(
@@ -450,6 +485,18 @@ async def _handle_discovery(msg: UserDataResponse) -> SetupAction:
     return await _start_discovery()
 
 
+def _parse_port(value: Any) -> int:
+    """Parse a port input, falling back to the BluOS default when invalid."""
+    try:
+        port = int(value if value is not None else DEFAULT_BLUOS_PORT)
+    except (ValueError, TypeError):
+        return DEFAULT_BLUOS_PORT
+    if not _is_valid_port(port):
+        _LOG.warning("Invalid port: %s", port)
+        return DEFAULT_BLUOS_PORT
+    return port
+
+
 def _show_device_choice() -> SetupAction:
     """Show discovered device selection."""
     items = []
@@ -465,11 +512,11 @@ def _show_device_choice() -> SetupAction:
         )
 
     return RequestUserInput(
-        {"en": "Select Device", "de": "Gerät auswählen"},
+        _a("Select Device"),
         [
             {
                 "id": "device",
-                "label": {"en": "BluOS Player", "de": "BluOS-Player"},
+                "label": _a("BluOS Player"),
                 "field": {
                     "dropdown": {
                         "value": "0",
@@ -494,154 +541,155 @@ async def _handle_device_choice(msg: UserDataResponse) -> SetupAction:
         _selected_device = _discovered_devices[device_index]
         _setup_step = SetupSteps.DEVICE_CONFIGURE
         return _show_device_configure()
+    return SetupError()
+
+
+# ---------------------------------------------------------------------------
+# Device settings (new device or "configure" of an existing one)
+# ---------------------------------------------------------------------------
+
+
+def _number_field(field_id: str, label: str, value: float, *, low: int, high: int, step: int) -> dict[str, Any]:
+    return {
+        "id": field_id,
+        "label": _a(label),
+        "field": {"number": {"value": value, "min": low, "max": high, "steps": step}},
+    }
+
+
+def _show_device_configure(address_error: bool = False) -> SetupAction:
+    """
+    Show device settings.
+
+    For a new device the values are defaults; when editing an existing device
+    they are pre-filled and the address/port can be changed too (e.g. after the
+    player got a new IP address).
+    """
+    editing = _editing_device
+    if editing is not None:
+        name = editing.name
+        volume_step = editing.volume_step
+        timeout = editing.timeout
+        standby_timeout = editing.standby_timeout
+        active_poll_timeout = editing.active_poll_timeout
     else:
-        return SetupError()
+        name = _selected_device.name if _selected_device else "BluOS Player"
+        volume_step = DEFAULT_VOLUME_STEP
+        timeout = DEFAULT_TIMEOUT
+        standby_timeout = DEFAULT_STANDBY_TIMEOUT
+        active_poll_timeout = DEFAULT_ACTIVE_POLL_TIMEOUT
+
+    settings: list[dict[str, Any]] = []
+    if address_error:
+        settings.append(
+            {
+                "id": "error",
+                "label": _a("Error"),
+                "field": {"label": {"value": _a("Please enter a valid IP address")}},
+            }
+        )
+    settings.append({"id": "name", "label": _a("Device Name"), "field": {"text": {"value": name}}})
+    if editing is not None:
+        settings.append({"id": "address", "label": _a("IP Address"), "field": {"text": {"value": editing.address}}})
+        port_field = _manual_port_field(editing.port)
+        port_field["id"] = "port"
+        settings.append(port_field)
+    settings += [
+        _number_field("volume_step", "Volume Step (1-10)", volume_step, low=1, high=10, step=1),
+        _number_field("timeout", "Connection Timeout (seconds)", timeout, low=1, high=30, step=1),
+        _number_field("standby_timeout", "Standby Timeout (seconds)", standby_timeout, low=15, high=300, step=15),
+        _number_field(
+            "active_poll_timeout", "Active Poll Timeout (seconds)", active_poll_timeout, low=10, high=120, step=5
+        ),
+    ]
+
+    title = _a("Configure Device") if editing is not None else _a("Device Configuration")
+    return RequestUserInput(title, settings)
 
 
-def _show_device_configure() -> SetupAction:
-    """Show device configuration options."""
-    default_name = _selected_device.name if _selected_device else "BluOS Player"
-
-    return RequestUserInput(
-        {"en": "Device Configuration", "de": "Gerätekonfiguration"},
-        [
-            {
-                "id": "name",
-                "label": {"en": "Device Name", "de": "Gerätename"},
-                "field": {"text": {"value": default_name}},
-            },
-            {
-                "id": "volume_step",
-                "label": {
-                    "en": "Volume Step (1-10)",
-                    "de": "Lautstärkeschritt (1-10)",
-                },
-                "field": {
-                    "number": {
-                        "value": 5,
-                        "min": 1,
-                        "max": 10,
-                        "steps": 1,
-                    }
-                },
-            },
-            {
-                "id": "timeout",
-                "label": {
-                    "en": "Connection Timeout (seconds)",
-                    "de": "Verbindungs-Timeout (Sekunden)",
-                },
-                "field": {
-                    "number": {
-                        "value": 5,
-                        "min": 1,
-                        "max": 30,
-                        "steps": 1,
-                    }
-                },
-            },
-            {
-                "id": "standby_timeout",
-                "label": {
-                    "en": "Standby Timeout (seconds)",
-                    "de": "Standby-Timeout (Sekunden)",
-                },
-                "field": {
-                    "number": {
-                        "value": 60,
-                        "min": 15,
-                        "max": 300,
-                        "steps": 15,
-                    }
-                },
-            },
-            {
-                "id": "active_poll_timeout",
-                "label": {
-                    "en": "Active Poll Timeout (seconds)",
-                    "de": "Aktiv-Poll-Timeout (Sekunden)",
-                },
-                "field": {
-                    "number": {
-                        "value": 30,
-                        "min": 10,
-                        "max": 120,
-                        "steps": 5,
-                    }
-                },
-            },
-        ],
-    )
+def _int_input(msg: UserDataResponse, key: str, default: int) -> int:
+    try:
+        return int(msg.input_values.get(key, default))
+    except (ValueError, TypeError):
+        return default
 
 
 async def _handle_device_configure(msg: UserDataResponse) -> SetupAction:
-    """Handle device configuration."""
-    global _setup_step, _selected_device, _configured_device
+    """Handle device settings for a new or an edited device."""
+    global _configured_device
 
-    if not _selected_device:
+    editing = _editing_device
+    if editing is None and not _selected_device:
         return SetupError()
 
-    name = msg.input_values.get("name", _selected_device.name)
     try:
-        volume_step = int(msg.input_values.get("volume_step", 5))
+        timeout = float(msg.input_values.get("timeout", DEFAULT_TIMEOUT))
     except (ValueError, TypeError):
-        volume_step = 5
-    try:
-        timeout = float(msg.input_values.get("timeout", 5))
-    except (ValueError, TypeError):
-        timeout = 5.0
-    try:
-        standby_timeout = int(msg.input_values.get("standby_timeout", 60))
-    except (ValueError, TypeError):
-        standby_timeout = 60
-    try:
-        active_poll_timeout = int(msg.input_values.get("active_poll_timeout", 30))
-    except (ValueError, TypeError):
-        active_poll_timeout = 30
+        timeout = DEFAULT_TIMEOUT
+    volume_step = _int_input(msg, "volume_step", DEFAULT_VOLUME_STEP)
+    standby_timeout = _int_input(msg, "standby_timeout", DEFAULT_STANDBY_TIMEOUT)
+    active_poll_timeout = _int_input(msg, "active_poll_timeout", DEFAULT_ACTIVE_POLL_TIMEOUT)
 
-    # Create device configuration
-    # Use MAC if available, otherwise generate from IP
-    device_id = _selected_device.mac or _selected_device.host.replace(".", "_")
-
-    _configured_device = BluOSDevice(
-        id=device_id,
-        name=name,
-        address=_selected_device.host,
-        port=_selected_device.port,
-        volume_step=volume_step,
-        timeout=timeout,
-        standby_timeout=standby_timeout,
-        active_poll_timeout=active_poll_timeout,
-        model=_selected_device.model,
-    )
+    if editing is not None:
+        address = (msg.input_values.get("address") or editing.address).strip()
+        if not _is_valid_ip_address(address):
+            _LOG.warning("Invalid IP address format: %s", address)
+            return _show_device_configure(address_error=True)
+        port = _parse_port(msg.input_values.get("port", editing.port))
+        # Keep the id so entity ids — and the user's activities — stay intact.
+        _configured_device = BluOSDevice(
+            id=editing.id,
+            name=msg.input_values.get("name") or editing.name,
+            address=address,
+            port=port,
+            volume_step=volume_step,
+            timeout=timeout,
+            standby_timeout=standby_timeout,
+            active_poll_timeout=active_poll_timeout,
+            model=editing.model,
+        )
+    else:
+        assert _selected_device is not None
+        # Use MAC if available, otherwise generate from IP
+        device_id = _selected_device.mac or _selected_device.host.replace(".", "_")
+        _configured_device = BluOSDevice(
+            id=device_id,
+            name=msg.input_values.get("name", _selected_device.name),
+            address=_selected_device.host,
+            port=_selected_device.port,
+            volume_step=volume_step,
+            timeout=timeout,
+            standby_timeout=standby_timeout,
+            active_poll_timeout=active_poll_timeout,
+            model=_selected_device.model,
+        )
 
     _LOG.info("Device configured: %s (%s)", _configured_device.name, _configured_device.address)
-
-    # Reset state
-    _setup_step = SetupSteps.INIT
-    _selected_device = None
-
+    _reset_state()
     return SetupComplete()
 
 
 def get_setup_data_schema() -> dict[str, Any]:
-    """Get the setup data schema for driver.json."""
+    """
+    Get the initial setup page schema.
+
+    driver.json holds a static copy (it cannot load translations); keep the
+    texts in sync when changing them here.
+    """
     return {
-        "title": {"en": "BluOS Integration", "de": "BluOS Integration"},
+        "title": _a("BluOS Integration"),
         "settings": [
             {
                 "id": "info",
-                "label": {"en": "Information", "de": "Information"},
+                "label": _a("Information"),
                 "field": {
                     "label": {
-                        "value": {
-                            "en": "This integration allows you to control BluOS-enabled "
-                            "streaming players including Bluesound, NAD, and DALI devices."
-                            "\n\nClick 'Next' to start device discovery.",
-                            "de": "Diese Integration ermöglicht die Steuerung von BluOS-fähigen "
-                            "Streaming-Playern einschließlich Bluesound-, NAD- und DALI-Geräten."
-                            "\n\nKlicken Sie auf 'Weiter', um die Geräteerkennung zu starten.",
-                        }
+                        "value": _am(
+                            "This integration allows you to control BluOS-enabled "
+                            "streaming players including Bluesound, NAD, and DALI devices.",
+                            "\n\n",
+                            "Click 'Next' to start device discovery.",
+                        )
                     }
                 },
             }

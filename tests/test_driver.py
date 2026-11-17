@@ -254,3 +254,76 @@ class TestGroupingOptionsRefresh:
         assert GROUP_ALL_CMD in entity1.simple_commands
         assert f"{GROUP_TOGGLE_PREFIX}Living Room" in entity2.simple_commands
         assert GROUP_ALL_CMD in entity2.simple_commands
+
+
+class TestRestartKeepsSubscriptions:
+    """A restart (restore/configure of a changed device) keeps entities subscribed."""
+
+    @pytest.fixture
+    def real_stores(self, driver_state):
+        """Use real ucapi entity stores so add/remove/get behave like production."""
+        from ucapi.entities import Entities
+
+        driver_state.available_entities = Entities("available", driver._LOOP)
+        driver_state.configured_entities = Entities("configured", driver._LOOP)
+        saved = {
+            "_sensor_entities": dict(driver._sensor_entities),
+            "_remote_entities": dict(driver._remote_entities),
+            "_sensor_entity_id_to_device_id": dict(driver._sensor_entity_id_to_device_id),
+            "_remote_entity_id_to_device_id": dict(driver._remote_entity_id_to_device_id),
+        }
+        for name in saved:
+            getattr(driver, name).clear()
+        yield driver_state
+        for name, value in saved.items():
+            getattr(driver, name).clear()
+            getattr(driver, name).update(value)
+
+    @staticmethod
+    def _fake_player_factory(created):
+        from bluos import BluOSPlayer
+
+        def factory(device, _loop):
+            player = MagicMock(spec=BluOSPlayer)
+            player.id = device.id
+            player.name = device.name
+            player.device = device
+            player.available = False
+            player.presets = []
+            player.get_source_list.return_value = []
+            player.connect = AsyncMock()
+            player.disconnect = AsyncMock()
+            created.append(player)
+            return player
+
+        return factory
+
+    def test_restart_moves_subscriptions_to_new_entities(self, real_stores, monkeypatch):
+        from config import BluOSDevice
+
+        created = []
+        monkeypatch.setattr(driver, "BluOSPlayer", self._fake_player_factory(created))
+        api = real_stores
+        device = BluOSDevice(id="aa", name="Kitchen", address="10.0.0.1")
+
+        run(driver._add_player(device))
+        old_media = driver._entities["aa"]
+        old_select = driver._select_entities["aa"]
+        # Remote subscribes to the media player and the select (not sensor/remote).
+        api.configured_entities.add(old_media)
+        api.configured_entities.add(old_select)
+
+        changed = BluOSDevice(id="aa", name="Kitchen", address="10.0.0.99")
+        run(driver._restart_player(changed))
+
+        new_media = driver._entities["aa"]
+        assert new_media is not old_media
+        assert new_media.player is created[-1]
+        # Subscribed entities now point at the new objects -> commands reach the new player.
+        assert api.configured_entities.get(old_media.id) is new_media
+        assert api.configured_entities.get(old_select.id) is driver._select_entities["aa"]
+        # Unsubscribed entities are not silently subscribed.
+        assert api.configured_entities.get(driver._sensor_entities["aa"].id) is None
+        assert api.configured_entities.get(driver._remote_entities["aa"].id) is None
+        created[0].disconnect.assert_awaited_once()
+        created[-1].connect.assert_awaited_once()

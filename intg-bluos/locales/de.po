@@ -1,0 +1,145 @@
+# German translations for the BluOS integration.
+msgid ""
+msgstr ""
+"Language: de\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+# Configuration mode
+msgid "BluOS Configuration"
+msgstr "BluOS Konfiguration"
+
+msgid "Configured devices"
+msgstr "Konfigurierte Geräte"
+
+msgid "Action"
+msgstr "Aktion"
+
+msgid "Add a new device"
+msgstr "Neues Gerät hinzufügen"
+
+msgid "Configure selected device"
+msgstr "Ausgewähltes Gerät konfigurieren"
+
+msgid "Remove selected device"
+msgstr "Ausgewähltes Gerät entfernen"
+
+msgid "Reset configuration"
+msgstr "Konfiguration zurücksetzen"
+
+msgid "Backup configuration"
+msgstr "Konfiguration sichern"
+
+msgid "Restore configuration from backup"
+msgstr "Konfiguration aus Sicherung wiederherstellen"
+
+# Backup / restore
+msgid "Backup"
+msgstr "Sicherung"
+
+msgid "Copy the configuration below and keep it somewhere safe. Use 'Restore configuration from backup' to load it again."
+msgstr "Kopieren Sie die folgende Konfiguration und bewahren Sie sie sicher auf. Mit 'Konfiguration aus Sicherung wiederherstellen' können Sie sie wieder laden."
+
+msgid "Configuration"
+msgstr "Konfiguration"
+
+msgid "Restore configuration"
+msgstr "Konfiguration wiederherstellen"
+
+msgid "Restore"
+msgstr "Wiederherstellen"
+
+msgid "Paste a previously saved backup. All configured devices will be replaced."
+msgstr "Fügen Sie eine zuvor gespeicherte Sicherung ein. Alle konfigurierten Geräte werden ersetzt."
+
+msgid "Error"
+msgstr "Fehler"
+
+msgid "The configuration could not be read. Please paste a valid backup."
+msgstr "Die Konfiguration konnte nicht gelesen werden. Bitte fügen Sie eine gültige Sicherung ein."
+
+# Discovery
+msgid "Device Discovery"
+msgstr "Geräteerkennung"
+
+msgid "Discovery Method"
+msgstr "Erkennungsmethode"
+
+msgid "Auto-discover (recommended)"
+msgstr "Automatisch erkennen (empfohlen)"
+
+msgid "Manual IP entry"
+msgstr "Manuelle IP-Eingabe"
+
+msgid "IP Address (for manual entry)"
+msgstr "IP-Adresse (für manuelle Eingabe)"
+
+msgid "Manual Device Entry"
+msgstr "Manuelle Geräteeingabe"
+
+msgid "IP Address"
+msgstr "IP-Adresse"
+
+msgid "Port"
+msgstr "Port"
+
+msgid "No Devices Found"
+msgstr "Keine Geräte gefunden"
+
+msgid "No BluOS devices found. Try again?"
+msgstr "Keine BluOS-Geräte gefunden. Erneut versuchen?"
+
+msgid "Yes, try again"
+msgstr "Ja, erneut versuchen"
+
+msgid "Enter IP manually"
+msgstr "IP manuell eingeben"
+
+msgid "Cancel"
+msgstr "Abbrechen"
+
+msgid "Invalid IP Address"
+msgstr "Ungültige IP-Adresse"
+
+msgid "Please enter a valid IP address"
+msgstr "Bitte geben Sie eine gültige IP-Adresse ein"
+
+msgid "Select Device"
+msgstr "Gerät auswählen"
+
+msgid "BluOS Player"
+msgstr "BluOS-Player"
+
+# Device settings
+msgid "Device Configuration"
+msgstr "Gerätekonfiguration"
+
+msgid "Configure Device"
+msgstr "Gerät konfigurieren"
+
+msgid "Device Name"
+msgstr "Gerätename"
+
+msgid "Volume Step (1-10)"
+msgstr "Lautstärkeschritt (1-10)"
+
+msgid "Connection Timeout (seconds)"
+msgstr "Verbindungs-Timeout (Sekunden)"
+
+msgid "Standby Timeout (seconds)"
+msgstr "Standby-Timeout (Sekunden)"
+
+msgid "Active Poll Timeout (seconds)"
+msgstr "Aktiv-Poll-Timeout (Sekunden)"
+
+# Initial setup page
+msgid "BluOS Integration"
+msgstr "BluOS Integration"
+
+msgid "Information"
+msgstr "Information"
+
+msgid "This integration allows you to control BluOS-enabled streaming players including Bluesound, NAD, and DALI devices."
+msgstr "Diese Integration ermöglicht die Steuerung von BluOS-fähigen Streaming-Playern einschließlich Bluesound-, NAD- und DALI-Geräten."
+
+msgid "Click 'Next' to start device discovery."
+msgstr "Klicken Sie auf 'Weiter', um die Geräteerkennung zu starten."

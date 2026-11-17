@@ -71,6 +71,7 @@ in
         --name driver \
         --paths intg-bluos \
         --add-data "driver.json:." \
+        --add-data "intg-bluos/locales:locales" \
         intg-bluos/driver.py
       echo "Build complete: dist/driver/"
     '';
@@ -104,6 +105,7 @@ in
         pyinstaller --clean --onedir --name driver -y \
         --paths intg-bluos \
         --add-data driver.json:. \
+        --add-data intg-bluos/locales:locales \
         intg-bluos/driver.py'; then
         echo "Docker build failed!"
         exit 1

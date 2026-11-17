@@ -1,0 +1,145 @@
+# Dutch translations for the BluOS integration.
+msgid ""
+msgstr ""
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+# Configuration mode
+msgid "BluOS Configuration"
+msgstr "BluOS-configuratie"
+
+msgid "Configured devices"
+msgstr "Geconfigureerde apparaten"
+
+msgid "Action"
+msgstr "Actie"
+
+msgid "Add a new device"
+msgstr "Nieuw apparaat toevoegen"
+
+msgid "Configure selected device"
+msgstr "Geselecteerd apparaat configureren"
+
+msgid "Remove selected device"
+msgstr "Geselecteerd apparaat verwijderen"
+
+msgid "Reset configuration"
+msgstr "Configuratie resetten"
+
+msgid "Backup configuration"
+msgstr "Configuratie back-uppen"
+
+msgid "Restore configuration from backup"
+msgstr "Configuratie herstellen uit back-up"
+
+# Backup / restore
+msgid "Backup"
+msgstr "Back-up"
+
+msgid "Copy the configuration below and keep it somewhere safe. Use 'Restore configuration from backup' to load it again."
+msgstr "Kopieer de configuratie hieronder en bewaar die op een veilige plek. Gebruik 'Configuratie herstellen uit back-up' om hem weer te laden."
+
+msgid "Configuration"
+msgstr "Configuratie"
+
+msgid "Restore configuration"
+msgstr "Configuratie herstellen"
+
+msgid "Restore"
+msgstr "Herstellen"
+
+msgid "Paste a previously saved backup. All configured devices will be replaced."
+msgstr "Plak een eerder opgeslagen back-up. Alle geconfigureerde apparaten worden vervangen."
+
+msgid "Error"
+msgstr "Fout"
+
+msgid "The configuration could not be read. Please paste a valid backup."
+msgstr "De configuratie kon niet worden gelezen. Plak een geldige back-up."
+
+# Discovery
+msgid "Device Discovery"
+msgstr "Apparaten zoeken"
+
+msgid "Discovery Method"
+msgstr "Zoekmethode"
+
+msgid "Auto-discover (recommended)"
+msgstr "Automatisch zoeken (aanbevolen)"
+
+msgid "Manual IP entry"
+msgstr "IP-adres handmatig invoeren"
+
+msgid "IP Address (for manual entry)"
+msgstr "IP-adres (voor handmatige invoer)"
+
+msgid "Manual Device Entry"
+msgstr "Apparaat handmatig toevoegen"
+
+msgid "IP Address"
+msgstr "IP-adres"
+
+msgid "Port"
+msgstr "Poort"
+
+msgid "No Devices Found"
+msgstr "Geen apparaten gevonden"
+
+msgid "No BluOS devices found. Try again?"
+msgstr "Geen BluOS-apparaten gevonden. Opnieuw proberen?"
+
+msgid "Yes, try again"
+msgstr "Ja, opnieuw proberen"
+
+msgid "Enter IP manually"
+msgstr "IP-adres handmatig invoeren"
+
+msgid "Cancel"
+msgstr "Annuleren"
+
+msgid "Invalid IP Address"
+msgstr "Ongeldig IP-adres"
+
+msgid "Please enter a valid IP address"
+msgstr "Voer een geldig IP-adres in"
+
+msgid "Select Device"
+msgstr "Apparaat kiezen"
+
+msgid "BluOS Player"
+msgstr "BluOS-speler"
+
+# Device settings
+msgid "Device Configuration"
+msgstr "Apparaatconfiguratie"
+
+msgid "Configure Device"
+msgstr "Apparaat configureren"
+
+msgid "Device Name"
+msgstr "Apparaatnaam"
+
+msgid "Volume Step (1-10)"
+msgstr "Volumestap (1-10)"
+
+msgid "Connection Timeout (seconds)"
+msgstr "Verbindingstime-out (seconden)"
+
+msgid "Standby Timeout (seconds)"
+msgstr "Standby-time-out (seconden)"
+
+msgid "Active Poll Timeout (seconds)"
+msgstr "Time-out actieve polling (seconden)"
+
+# Initial setup page
+msgid "BluOS Integration"
+msgstr "BluOS-integratie"
+
+msgid "Information"
+msgstr "Informatie"
+
+msgid "This integration allows you to control BluOS-enabled streaming players including Bluesound, NAD, and DALI devices."
+msgstr "Met deze integratie bedien je streamingspelers met BluOS, waaronder apparaten van Bluesound, NAD en DALI."
+
+msgid "Click 'Next' to start device discovery."
+msgstr "Klik op 'Volgende' om apparaten te zoeken."

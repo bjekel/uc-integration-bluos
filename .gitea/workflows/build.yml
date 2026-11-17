@@ -89,6 +89,7 @@ jobs:
             --name driver \
             --paths intg-bluos \
             --add-data 'driver.json:.' \
+            --add-data 'intg-bluos/locales:locales' \
             intg-bluos/driver.py
           FROM scratch
           COPY --from=build /src/dist/driver/ /

@@ -34,6 +34,9 @@ class BluOSDiscovery:
         self._devices: dict[str, DiscoveredDevice] = {}
         self._azc: AsyncZeroconf | None = None
         self._browser: AsyncServiceBrowser | None = None
+        # Strong references: the event loop only keeps weak ones, and we must
+        # finish or cancel them before closing zeroconf.
+        self._resolve_tasks: set[asyncio.Task] = set()
 
     async def discover(self, timeout: float = 5.0) -> list[DiscoveredDevice]:
         """
@@ -59,20 +62,38 @@ class BluOSDiscovery:
             _LOG.debug("Starting BluOS discovery for %.1f seconds", timeout)
             await asyncio.sleep(timeout)
 
-            if self._browser:
-                self._browser.cancel()
-                self._browser = None
-
         except Exception as e:
             _LOG.error("Discovery error: %s", e)
         finally:
-            if self._azc:
-                await self._azc.async_close()
-                self._azc = None
+            await self._shutdown()
 
         devices = list(self._devices.values())
         _LOG.info("Discovered %d BluOS devices", len(devices))
         return devices
+
+    async def _shutdown(self) -> None:
+        """Stop browsing, let in-flight resolves finish, then close zeroconf."""
+        if self._browser:
+            try:
+                # AsyncServiceBrowser only has async_cancel(); cancel() is the
+                # threaded ServiceBrowser API and raises AttributeError here.
+                await self._browser.async_cancel()
+            except Exception as e:
+                _LOG.debug("Stopping discovery browser failed: %s", e)
+            self._browser = None
+
+        if self._resolve_tasks:
+            # A resolve takes at most 3 s (async_request timeout); a device that
+            # answered just before the deadline is still added.
+            _, pending = await asyncio.wait(self._resolve_tasks, timeout=3.5)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            self._resolve_tasks.clear()
+
+        if self._azc:
+            await self._azc.async_close()
+            self._azc = None
 
     def _on_service_state_change(
         self,
@@ -83,7 +104,9 @@ class BluOSDiscovery:
     ) -> None:
         """Handle service state changes."""
         if state_change == ServiceStateChange.Added:
-            asyncio.create_task(self._resolve_service(zeroconf, service_type, name))
+            task = asyncio.create_task(self._resolve_service(zeroconf, service_type, name))
+            self._resolve_tasks.add(task)
+            task.add_done_callback(self._resolve_tasks.discard)
         elif state_change == ServiceStateChange.Removed:
             if name in self._devices:
                 _LOG.debug("Device removed: %s", name)

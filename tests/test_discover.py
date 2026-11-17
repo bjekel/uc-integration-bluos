@@ -11,6 +11,7 @@ from discover import (
     DiscoveredDevice,
     discover_bluos_players,
 )
+from zeroconf import ServiceStateChange
 
 
 class TestDiscoveredDevice:
@@ -76,11 +77,82 @@ class TestBluOSDiscovery:
         with patch.object(discovery, "_azc", None):
             with patch("discover.AsyncZeroconf") as mock_zc:
                 mock_zc.return_value.async_close = AsyncMock()
-                with patch("discover.AsyncServiceBrowser") as mock_browser:
-                    mock_browser.return_value.cancel = MagicMock()
+                with patch("discover.AsyncServiceBrowser", autospec=True) as mock_browser:
                     devices = await discovery.discover(timeout=0.1)
 
         assert devices == []
+        mock_browser.return_value.async_cancel.assert_awaited_once()
+        mock_zc.return_value.async_close.assert_awaited_once()
+
+    @staticmethod
+    def _patched_zeroconf():
+        zc = patch("discover.AsyncZeroconf")
+        browser = patch("discover.AsyncServiceBrowser", autospec=True)
+        return zc, browser
+
+    @pytest.mark.asyncio
+    async def test_browser_cancel_failure_still_closes_zeroconf(self, discovery):
+        zc_patch, browser_patch = self._patched_zeroconf()
+        with zc_patch as mock_zc, browser_patch as mock_browser:
+            mock_zc.return_value.async_close = AsyncMock()
+            mock_browser.return_value.async_cancel.side_effect = RuntimeError("boom")
+            assert await discovery.discover(timeout=0.01) == []
+        mock_zc.return_value.async_close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_in_flight_resolve_finishes_before_close(self, discovery):
+        """A device that answers just before the deadline is still returned."""
+        zc_patch, browser_patch = self._patched_zeroconf()
+
+        async def slow_resolve(_zc, _type, name):
+            await asyncio.sleep(0.2)
+            discovery._devices[name] = DiscoveredDevice(host="10.0.0.5", port=11000, name="Late")
+
+        def start_browser(zeroconf, _types, handlers):
+            handlers[0](zeroconf, BLUOS_SERVICE_TYPE, "Late._musc._tcp.local.", ServiceStateChange.Added)
+            return MagicMock(async_cancel=AsyncMock())
+
+        with (
+            zc_patch as mock_zc,
+            browser_patch as mock_browser,
+            patch.object(discovery, "_resolve_service", slow_resolve),
+        ):
+            mock_zc.return_value.async_close = AsyncMock()
+            mock_browser.side_effect = start_browser
+            devices = await discovery.discover(timeout=0.01)
+
+        assert [d.name for d in devices] == ["Late"]
+        assert not discovery._resolve_tasks
+
+    @pytest.mark.asyncio
+    async def test_hanging_resolve_is_cancelled(self, discovery, monkeypatch):
+        zc_patch, browser_patch = self._patched_zeroconf()
+        cancelled = asyncio.Event()
+
+        async def hanging_resolve(_zc, _type, _name):
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        def start_browser(zeroconf, _types, handlers):
+            handlers[0](zeroconf, BLUOS_SERVICE_TYPE, "Hang._musc._tcp.local.", ServiceStateChange.Added)
+            return MagicMock(async_cancel=AsyncMock())
+
+        real_wait = asyncio.wait
+        monkeypatch.setattr(asyncio, "wait", lambda fs, timeout: real_wait(fs, timeout=0.05))
+        with (
+            zc_patch as mock_zc,
+            browser_patch as mock_browser,
+            patch.object(discovery, "_resolve_service", hanging_resolve),
+        ):
+            mock_zc.return_value.async_close = AsyncMock()
+            mock_browser.side_effect = start_browser
+            assert await discovery.discover(timeout=0.01) == []
+
+        assert cancelled.is_set()
+        mock_zc.return_value.async_close.assert_awaited_once()
 
 
 class TestDiscoverBluosPlayers:

@@ -1,6 +1,7 @@
 """Tests for media_player module."""
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -241,6 +242,49 @@ class TestBluOSMediaPlayer:
         )
 
         assert changed[Attributes.MEDIA_POSITION] == 0
+
+    def test_position_push_carries_sample_timestamp(self, entity, mock_player):
+        """Every pushed position is paired with an ISO-8601 UTC sample time."""
+        before = datetime.now(tz=UTC)
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 30, "media_duration": 180}
+        )
+        after = datetime.now(tz=UTC)
+
+        stamp = datetime.fromisoformat(changed[Attributes.MEDIA_POSITION_UPDATED_AT])
+        assert stamp.tzinfo is not None
+        assert before <= stamp <= after
+
+    def test_throttled_position_updates_timestamp_locally_only(self, entity, mock_player):
+        """A throttled position keeps position + timestamp consistent without pushing.
+
+        ucapi answers entity-state requests from self.attributes, so the
+        locally stored pair must not mix a fresh position with an old stamp.
+        """
+        first = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 30, "media_duration": 180}
+        )
+        first_stamp = first[Attributes.MEDIA_POSITION_UPDATED_AT]
+
+        with patch("media_player.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2030, 1, 1, tzinfo=UTC)
+            changed = entity.update_attributes(
+                {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 60, "media_duration": 180}
+            )
+
+        assert changed == {}  # no wake
+        assert entity.attributes[Attributes.MEDIA_POSITION] == 60
+        assert entity.attributes[Attributes.MEDIA_POSITION_UPDATED_AT] == "2030-01-01T00:00:00+00:00"
+        assert entity.attributes[Attributes.MEDIA_POSITION_UPDATED_AT] != first_stamp
+
+    def test_no_timestamp_without_position_push(self, entity, mock_player):
+        """A non-position change (volume) never pushes the timestamp on its own."""
+        entity.update_attributes({"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 30, "volume": 10})
+        changed = entity.update_attributes(
+            {"state": BluOSStates.PLAYING, "media_title": "A", "media_position": 30, "volume": 20}
+        )
+
+        assert changed == {Attributes.VOLUME: 20}
 
     def test_set_unavailable(self, entity):
         """Test setting entity as unavailable."""

@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from collections import OrderedDict
+from datetime import UTC, datetime
 from typing import Any, Callable
 
 import ucapi
@@ -297,10 +298,23 @@ class BluOSMediaPlayer(DiffPushMixin, ucapi.MediaPlayer):
         # a forced resync, a track change, a play/pause/stop transition, or an
         # explicit skip/seek. self.attributes still tracks the real position so
         # FAST_FORWARD/REWIND/SEEK math stays correct.
-        if Attributes.MEDIA_POSITION in changed and not (
-            force_full or Attributes.MEDIA_TITLE in changed or Attributes.STATE in changed or position_invalidated
-        ):
-            self.attributes[Attributes.MEDIA_POSITION] = changed.pop(Attributes.MEDIA_POSITION)
+        #
+        # Every position carries the moment it was sampled
+        # (MEDIA_POSITION_UPDATED_AT), so the Remote interpolates the bar from
+        # the real sample time rather than from when the message arrived or the
+        # Remote woke up to process it. The timestamp only rides along with a
+        # position push that happens anyway — never pushed on its own, so it
+        # costs no extra wakes. For a throttled position it is updated locally
+        # together with the position: ucapi answers entity-state requests from
+        # self.attributes, and a fresh position paired with a stale timestamp
+        # would make the Remote extrapolate too far.
+        if Attributes.MEDIA_POSITION in changed:
+            sampled_at = datetime.now(tz=UTC).isoformat()
+            if force_full or Attributes.MEDIA_TITLE in changed or Attributes.STATE in changed or position_invalidated:
+                changed[Attributes.MEDIA_POSITION_UPDATED_AT] = sampled_at
+            else:
+                self.attributes[Attributes.MEDIA_POSITION] = changed.pop(Attributes.MEDIA_POSITION)
+                self.attributes[Attributes.MEDIA_POSITION_UPDATED_AT] = sampled_at
 
         # Persist the diff locally so command handling and set_unavailable read
         # current state; the driver pushes `changed` to the Remote, which writes

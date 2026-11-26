@@ -143,3 +143,28 @@ msgstr "Met deze integratie bedien je streamingspelers met BluOS, waaronder appa
 
 msgid "Click 'Next' to start device discovery."
 msgstr "Klik op 'Volgende' om apparaten te zoeken."
+
+# Entity names (suffix after the device name)
+msgid "Presets"
+msgstr "Voorkeuzes"
+
+msgid "Input"
+msgstr "Ingang"
+
+msgid "Sleep Timer"
+msgstr "Slaaptimer"
+
+msgid "Group"
+msgstr "Groep"
+
+msgid "Source"
+msgstr "Bron"
+
+msgid "Volume"
+msgstr "Volume"
+
+msgid "Stream Quality"
+msgstr "Streamkwaliteit"
+
+msgid "Remote"
+msgstr "Afstandsbediening"

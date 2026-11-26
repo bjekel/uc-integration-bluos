@@ -143,3 +143,28 @@ msgstr "Diese Integration ermöglicht die Steuerung von BluOS-fähigen Streaming
 
 msgid "Click 'Next' to start device discovery."
 msgstr "Klicken Sie auf 'Weiter', um die Geräteerkennung zu starten."
+
+# Entity names (suffix after the device name)
+msgid "Presets"
+msgstr "Voreinstellungen"
+
+msgid "Input"
+msgstr "Eingang"
+
+msgid "Sleep Timer"
+msgstr "Schlaf-Timer"
+
+msgid "Group"
+msgstr "Gruppe"
+
+msgid "Source"
+msgstr "Quelle"
+
+msgid "Volume"
+msgstr "Lautstärke"
+
+msgid "Stream Quality"
+msgstr "Streamqualität"
+
+msgid "Remote"
+msgstr "Fernbedienung"

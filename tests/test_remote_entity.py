@@ -46,7 +46,11 @@ class TestBluOSRemote:
 
     def test_construction(self, remote):
         assert remote.id == "bluos_dev1_remote"
-        assert remote.name == {"en": "Living Room Remote"}
+        assert remote.name == {
+            "en": "Living Room Remote",
+            "de": "Living Room Fernbedienung",
+            "nl": "Living Room Afstandsbediening",
+        }
         assert Features.SEND_CMD in remote.features
         assert Features.ON_OFF in remote.features
 

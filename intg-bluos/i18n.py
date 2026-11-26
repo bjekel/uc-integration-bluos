@@ -134,4 +134,12 @@ def _am(*parts: str) -> dict[str, str]:
     return result
 
 
-__all__ = ["DEFAULT_LANGUAGE", "LANGUAGES", "_a", "_am", "catalogs", "parse_po"]
+def entity_name(device_name: str, suffix: str) -> dict[str, str]:
+    """
+    Entity name: the user's device name (never translated) plus a translated
+    suffix, e.g. ``{"en": "Kitchen Sleep Timer", "nl": "Kitchen Slaaptimer"}``.
+    """
+    return {lang: f"{device_name} {text}" for lang, text in _a(suffix).items()}
+
+
+__all__ = ["DEFAULT_LANGUAGE", "LANGUAGES", "_a", "_am", "catalogs", "entity_name", "parse_po"]

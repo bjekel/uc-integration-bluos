@@ -7,6 +7,7 @@ import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
 from entity_mixin import DiffPushMixin
+from i18n import entity_name
 from ucapi.sensor import Attributes, DeviceClasses, Options, States
 
 _LOG = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class BluOSGroupSensor(DiffPushMixin, ucapi.Sensor):
                 to map group endpoints back to friendly room names.
         """
         entity_id = f"bluos_{device.id}_group"
-        name = f"{device.name} Group"
+        name = entity_name(device.name, "Group")
 
         super().__init__(
             entity_id,
@@ -112,7 +113,7 @@ class _BluOSValueSensor(DiffPushMixin, ucapi.Sensor):
     def __init__(
         self,
         entity_id: str,
-        name: str,
+        name: str | dict[str, str],
         device: BluOSDevice,
         player: BluOSPlayer,
         *,
@@ -155,7 +156,7 @@ class BluOSSourceSensor(_BluOSValueSensor):
     """What is playing from: the input name ("Bluetooth") or service ("TIDAL")."""
 
     def __init__(self, device: BluOSDevice, player: BluOSPlayer):
-        super().__init__(f"bluos_{device.id}_source", f"{device.name} Source", device, player)
+        super().__init__(f"bluos_{device.id}_source", entity_name(device.name, "Source"), device, player)
 
     def _value(self, attributes: dict[str, Any]) -> Any:
         return attributes.get("service_name") or ""
@@ -167,7 +168,7 @@ class BluOSVolumeSensor(_BluOSValueSensor):
     def __init__(self, device: BluOSDevice, player: BluOSPlayer):
         super().__init__(
             f"bluos_{device.id}_volume_db",
-            f"{device.name} Volume",
+            entity_name(device.name, "Volume"),
             device,
             player,
             unit="dB",
@@ -183,7 +184,9 @@ class BluOSStreamQualitySensor(_BluOSValueSensor):
     """Stream format, e.g. "FLAC 16/44.1", "MQA" or "320 kbps"; empty when stopped."""
 
     def __init__(self, device: BluOSDevice, player: BluOSPlayer):
-        super().__init__(f"bluos_{device.id}_stream_quality", f"{device.name} Stream Quality", device, player)
+        super().__init__(
+            f"bluos_{device.id}_stream_quality", entity_name(device.name, "Stream Quality"), device, player
+        )
 
     def _value(self, attributes: dict[str, Any]) -> Any:
         return attributes.get("stream_quality") or ""

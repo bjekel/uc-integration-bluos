@@ -56,7 +56,11 @@ class TestBluOSPresetSelect:
     def test_initialization(self, entity):
         """Test entity initialization."""
         assert entity.id == "bluos_test_device_presets"
-        assert entity.name == {"en": "Test Player Presets"}
+        assert entity.name == {
+            "en": "Test Player Presets",
+            "de": "Test Player Voreinstellungen",
+            "nl": "Test Player Voorkeuzes",
+        }
 
     def test_initial_attributes(self, entity):
         """Test initial attribute values."""

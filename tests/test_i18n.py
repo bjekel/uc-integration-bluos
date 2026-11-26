@@ -7,7 +7,7 @@ import pytest
 import setup_flow
 from config import BluOSDevice, Devices
 from discover import DiscoveredDevice
-from i18n import LANGUAGES, _a, _am, catalogs, parse_po
+from i18n import LANGUAGES, _a, _am, catalogs, entity_name, parse_po
 from ucapi import DriverSetupRequest, UserDataResponse
 
 
@@ -94,3 +94,41 @@ def test_no_stale_translations():
     """Every catalog has the same msgids, so languages stay in step."""
     keys = [set(catalogs()[lang]) for lang in LANGUAGES]
     assert all(k == keys[0] for k in keys)
+
+
+def test_entity_name_keeps_device_name():
+    assert entity_name("Keuken", "Sleep Timer") == {
+        "en": "Keuken Sleep Timer",
+        "de": "Keuken Schlaf-Timer",
+        "nl": "Keuken Slaaptimer",
+    }
+
+
+def test_every_entity_name_is_translated():
+    """Fails when an entity gets a name suffix that is missing from a .po file."""
+    from unittest.mock import MagicMock
+
+    import driver
+    from bluos import BluOSPlayer
+    from media_player import BluOSMediaPlayer
+    from remote_entity import BluOSRemote
+    from select_entity import BluOSPresetSelect
+    from sensor_entity import BluOSGroupSensor
+
+    device = BluOSDevice(id="aa", name="Kitchen", address="10.0.0.1")
+    player = MagicMock(spec=BluOSPlayer)
+    player.presets = []
+    player.inputs = []
+    player.get_source_list.return_value = []
+    player.get_simple_commands.return_value = []
+    media = BluOSMediaPlayer(device, player, lambda: [])
+    entities = [
+        BluOSPresetSelect(device, player),
+        BluOSGroupSensor(device, player),
+        BluOSRemote(device, player, media),
+        *(factory(device, player) for factory in driver._STATUS_ENTITY_TYPES),
+    ]
+    assert len(entities) == 8
+    for entity in entities:
+        assert set(entity.name) == {"en", *LANGUAGES}, f"{entity.id} is missing a translation: {entity.name}"
+        assert all(name.startswith("Kitchen ") for name in entity.name.values())

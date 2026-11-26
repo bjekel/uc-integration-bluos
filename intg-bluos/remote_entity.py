@@ -15,6 +15,7 @@ import ucapi
 from bluos import BluOSPlayer
 from config import BluOSDevice
 from entity_mixin import DiffPushMixin
+from i18n import entity_name
 from media_player import BluOSMediaPlayer
 from ucapi.remote import Attributes, Commands, Features, Options, States
 from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
@@ -67,7 +68,7 @@ class BluOSRemote(DiffPushMixin, ucapi.Remote):
 
         super().__init__(
             f"bluos_{device.id}_remote",
-            f"{device.name} Remote",
+            entity_name(device.name, "Remote"),
             features=[Features.ON_OFF, Features.TOGGLE, Features.SEND_CMD],
             attributes={Attributes.STATE: States.UNAVAILABLE},
             simple_commands=self._build_simple_commands(),

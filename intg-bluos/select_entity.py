@@ -7,6 +7,7 @@ import ucapi
 from bluos import SLEEP_TIMER_STEPS, BluOSPlayer
 from config import BluOSDevice
 from entity_mixin import DiffPushMixin
+from i18n import entity_name
 from ucapi.select import Attributes, Commands, States
 
 _LOG = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ class BluOSPresetSelect(DiffPushMixin, ucapi.Select):
             player: BluOS player wrapper
         """
         entity_id = f"bluos_{device.id}_presets"
-        name = f"{device.name} Presets"
+        name = entity_name(device.name, "Presets")
 
         # Get initial options from player presets
         options = [preset.name for preset in player.presets]
@@ -181,7 +182,7 @@ class _BluOSOptionSelect(DiffPushMixin, ucapi.Select):
     and options normally only change after a (re)connect.
     """
 
-    def __init__(self, entity_id: str, name: str, device: BluOSDevice, player: BluOSPlayer):
+    def __init__(self, entity_id: str, name: str | dict[str, str], device: BluOSDevice, player: BluOSPlayer):
         self._device = device
         self._player = player
         super().__init__(
@@ -266,7 +267,7 @@ class BluOSInputSelect(_BluOSOptionSelect):
     """Physical inputs (Bluetooth, optical, HDMI ARC, …); empty while streaming."""
 
     def __init__(self, device: BluOSDevice, player: BluOSPlayer):
-        super().__init__(f"bluos_{device.id}_input", f"{device.name} Input", device, player)
+        super().__init__(f"bluos_{device.id}_input", entity_name(device.name, "Input"), device, player)
 
     def _options(self) -> list[str]:
         return [inp.text or inp.id for inp in self._player.inputs if inp.text or inp.id]
@@ -290,7 +291,7 @@ class BluOSSleepTimerSelect(_BluOSOptionSelect):
     """Sleep timer: Off, 15, 30, 45, 60 or 90 minutes."""
 
     def __init__(self, device: BluOSDevice, player: BluOSPlayer):
-        super().__init__(f"bluos_{device.id}_sleep_timer", f"{device.name} Sleep Timer", device, player)
+        super().__init__(f"bluos_{device.id}_sleep_timer", entity_name(device.name, "Sleep Timer"), device, player)
 
     def _options(self) -> list[str]:
         return [sleep_timer_label(step) for step in SLEEP_TIMER_STEPS]

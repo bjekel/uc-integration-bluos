@@ -62,8 +62,8 @@ keeps them in one registry (`_status_entities[device_id]`, a list, plus
 `_STATUS_ENTITY_TYPES`; registration, removal, restart, standby and subscribe
 handling then come for free. Their values come from keys in
 `BluOSPlayer._status_to_attributes` (`volume_db`, `sleep_timer`, `input_name`,
-`service_name`, `stream_quality`). Entity names are plain English, like the
-older entities (only setup texts are translated).
+`service_name`, `stream_quality`). Name them with `i18n.entity_name(device.name,
+"Suffix")` and add the suffix to every `.po` file.
 
 **Our own /Status long-poll:** `BluOSPlayer._fetch_status` sends the status
 request itself instead of calling `pyblu.Player.status()`, because pyblu's
@@ -108,9 +108,12 @@ entity objects (ucapi dispatches commands to the objects in
 `configured_entities`, so a stale one would talk to the old, closed player). `configure` keeps the device id (entity ids and the user's
 activities stay intact) and the driver restarts the player.
 
-**Translations:** all setup texts go through `i18n._a("English text")`. Add the
-string to every file in `intg-bluos/locales/` (`de.po`, `nl.po`); a test fails
-if any setup string lacks a translation. The `.po` files are parsed at runtime
+**Translations:** all setup texts go through `i18n._a("English text")`, and
+entity names through `i18n.entity_name(device.name, "Suffix")` (the user's device
+name is never translated, only the suffix: "Kitchen Slaaptimer"). Add the string
+to every file in `intg-bluos/locales/` (`de.po`, `nl.po`); tests fail if any setup
+string or entity name lacks a translation. Sensor values ("Not grouped",
+"Following …") are still English. The `.po` files are parsed at runtime
 (no `msgfmt` step) and bundled via `--add-data intg-bluos/locales:locales` in
 every PyInstaller invocation (devenv scripts, `driver.spec`, Gitea build).
 `driver.json` is static, so its `nl`/`de` texts are maintained by hand.
